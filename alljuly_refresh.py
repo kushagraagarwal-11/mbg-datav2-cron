@@ -103,26 +103,36 @@ _HG = {"X-CleverTap-Account-Id": CT_ACC, "X-CleverTap-Passcode": CT_PASS}
 def _cpost(p, b): return json.loads(U.urlopen(U.Request(CTB+p, data=json.dumps(b).encode(), headers=_HP), timeout=90).read().decode())
 def _cget(p): return json.loads(U.urlopen(U.Request(CTB+p, headers=_HG), timeout=90).read().decode())
 _today = datetime.datetime.now(IST).date()
-app, _best = {}, {}
-cur = _cpost("/1/profiles.json?batch_size=1000", {"event_name": "App Launched",
+import time as _time
+_expbody = {"event_name": "App Launched",
     "from": int((_today - datetime.timedelta(days=25)).strftime("%Y%m%d")),
-    "to": int((_today + datetime.timedelta(days=1)).strftime("%Y%m%d"))}).get("cursor")
-pg = 0
-while cur and pg < 60:
-    r = _cget("/1/profiles.json?cursor=" + cur); recs = r.get("records", []); pg += 1
-    for rec in recs:
-        pd = rec.get("profileData", {}); cid = pd.get("cspid")
-        if not cid or "mbg_screen" not in pd: continue
-        ls = max([p.get("ls", 0) for p in rec.get("platformInfo", [])] or [0])
-        if cid not in _best or ls > _best[cid]:
-            _best[cid] = ls
-            def _i(k):
-                try: return int(pd.get(k) or 0)
-                except Exception: return 0
-            app[cid] = {"screen": pd.get("mbg_screen_real") or pd.get("mbg_screen"), "installs": _i("mbg_installs"),
-                        "leads": _i("mbg_leads"), "pending": _i("mbg_pending"), "pct": _i("mbg_pct")}
-    cur = r.get("next_cursor")
-    if not recs: break
+    "to": int((_today + datetime.timedelta(days=1)).strftime("%Y%m%d"))}
+app = {}
+def _i(pd, k):
+    try: return int(pd.get(k) or 0)
+    except Exception: return 0
+for _attempt in range(6):   # the CleverTap export is intermittently empty -> retry
+    app, _best = {}, {}
+    try:
+        cur = _cpost("/1/profiles.json?batch_size=1000", _expbody).get("cursor")
+    except Exception as e:
+        print(f"  export attempt {_attempt+1}: post err {str(e)[:80]}", flush=True); _time.sleep(6); continue
+    pg = 0
+    while cur and pg < 80:
+        r = _cget("/1/profiles.json?cursor=" + cur); recs = r.get("records", []); pg += 1
+        for rec in recs:
+            pd = rec.get("profileData", {}); cid = pd.get("cspid")
+            if not cid or "mbg_screen" not in pd: continue
+            ls = max([p.get("ls", 0) for p in rec.get("platformInfo", [])] or [0])
+            if cid not in _best or ls > _best[cid]:
+                _best[cid] = ls
+                app[cid] = {"screen": pd.get("mbg_screen_real") or pd.get("mbg_screen"), "installs": _i(pd, "mbg_installs"),
+                            "leads": _i(pd, "mbg_leads"), "pending": _i(pd, "mbg_pending"), "pct": _i(pd, "mbg_pct")}
+        cur = r.get("next_cursor")
+        if not recs: break
+    if len(app) > 100: break
+    print(f"  CleverTap export attempt {_attempt+1}: {len(app)} CSPs — retrying", flush=True)
+    _time.sleep(6)
 print(f"CleverTap app values: {len(app)} CSPs", flush=True)
 
 # ---------- 3) IEC base query per (conn,csp) ----------
