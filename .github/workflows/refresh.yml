@@ -1,0 +1,27 @@
+name: Data V2 refresh (hourly)
+
+on:
+  schedule:
+    # every hour at :17 (off the congested top-of-hour). A dropped slot is covered
+    # by the next run; the sheet write is idempotent (clear + rewrite).
+    - cron: "17 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - name: Refresh All-July-Leads -> Data V2
+        env:
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+          SUPABASE_TOKEN: ${{ secrets.SUPABASE_TOKEN }}
+          MB_KEY: ${{ secrets.MB_KEY }}
+          CT_PASS: ${{ secrets.CT_PASS }}
+          FROZEN_COHORT_B64: ${{ secrets.FROZEN_COHORT_B64 }}
+        run: python alljuly_refresh.py
