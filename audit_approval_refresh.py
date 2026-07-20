@@ -4,7 +4,7 @@ Columns: Partner ID, CSP Name, City, Owner Mobile, Admin Mobile, Audit done?, Au
   Audit done?     = device scan complete in the audit tool (campaign 108a08d1, scan_complete_at).
   Audit approval? = partner agreed in the csp-approval portal (consents.agreed_at) — the PSF->SD consent.
 Creds from env (GitHub Actions secrets); falls back to local files for laptop runs."""
-import os, json, base64, csv, io, datetime, urllib.request as U
+import os, json, base64, csv, io, gzip, datetime, urllib.request as U
 HERE = os.path.dirname(os.path.abspath(__file__))
 SUPA = os.environ.get("SUPABASE_TOKEN") or open(os.path.join(HERE, "..", "mbg-cron", "supabase_token.txt")).read().strip()
 MB_KEY = os.environ.get("MB_KEY") or "mb_1dsbxsJfyROPsVyNpifJ8hTTlIDG85+qNKRo91KDnb4="
@@ -29,7 +29,11 @@ def mb(q):
 # ---- 1) the 1076 cohort (from secret, or local CSV on laptop) ----
 b64 = os.environ.get("CSP_1076_B64")
 if b64:
-    txt = base64.b64decode(b64).decode("utf-8")
+    raw = base64.b64decode(b64)
+    try:
+        txt = gzip.decompress(raw).decode("utf-8")   # secret is gzip+base64
+    except Exception:
+        txt = raw.decode("utf-8")                    # or plain base64
 else:
     txt = open(r"C:\Users\Palak Vardhan\escape_velocity\CSP_1076_active_loggedin_mobile.csv", encoding="utf-8").read()
 rows = list(csv.DictReader(io.StringIO(txt)))
