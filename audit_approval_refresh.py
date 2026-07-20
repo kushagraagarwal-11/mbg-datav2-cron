@@ -43,8 +43,8 @@ print(f"cohort: {len(rows)} CSPs", flush=True)
 
 # ---- 2) audit done (scan_complete) ----
 done = set(str(r["pid"]) for r in sb(f"select distinct partner_id::text pid from campaign_partners where campaign_id='{MGCAMP}' and scan_complete_at is not null and partner_id::text in ('{pl}')", AUDIT))
-# ---- 3) audit approval (consents) ----
-appr = set(str(r["partner_id"]) for r in sb(f"select distinct partner_id from consents where agreed_at is not null and partner_id in ('{pl}')", APPROVAL))
+# ---- 3) consent form (consents) — value = consented-on date in IST ----
+appr = {str(r["partner_id"]): (r["d"] or "") for r in sb(f"select partner_id, to_char(agreed_at at time zone 'Asia/Kolkata','DD-Mon-YYYY HH24:MI') d from consents where agreed_at is not null and partner_id in ('{pl}')", APPROVAL)}
 # ---- 4) city (SUPPLY_MODEL) ----
 city = {str(r[0]): (r[1] or "") for r in mb(f"select PARTNER_ACCOUNT_ID::text, ANY_VALUE(CITY) from PROD_DB.PUBLIC.SUPPLY_MODEL where PARTNER_ACCOUNT_ID::text in ('{pl}') group by 1")}
 print(f"audit done={sum(1 for p in pids if p in done)} | approved={sum(1 for p in pids if p in appr)} | city={sum(1 for p in pids if city.get(p))}", flush=True)
@@ -52,12 +52,12 @@ print(f"audit done={sum(1 for p in pids if p in done)} | approved={sum(1 for p i
 # ---- 5) build + write ----
 yn = lambda b: "Yes" if b else "No"
 stamp = datetime.datetime.now(IST).strftime("%d-%b %H:%M IST")
-hdr = ["Partner ID", "CSP Name", "City", "Owner Mobile", "Admin Mobile", "Audit done?", "Audit approval?", f"(updated {stamp})"]
+hdr = ["Partner ID", "CSP Name", "City", "Owner Mobile", "Admin Mobile", "Audit done?", "Consent form", "Consented on", f"(updated {stamp})"]
 grid = [hdr]
 for r in rows:
     p = str(r["partner_account_id"]).strip()
     grid.append([p, r.get("csp_name", ""), city.get(p, ""), r.get("owner_mobile", ""), r.get("admin_mobile", ""),
-                 yn(p in done), yn(p in appr), ""])
+                 yn(p in done), yn(p in appr), appr.get(p, ""), ""])
 
 import gspread
 from google.oauth2.service_account import Credentials
@@ -69,5 +69,5 @@ sh = gspread.authorize(creds).open_by_key(SHEET)
 ws = sh.get_worksheet(0)
 ws.clear(); ws.resize(rows=len(grid) + 5, cols=len(hdr))
 ws.update(range_name="A1", values=grid, value_input_option="RAW")
-ws.format("A1:H1", {"textFormat": {"bold": True}})
+ws.format("A1:I1", {"textFormat": {"bold": True}})
 print(f"WROTE '{ws.title}': {len(grid)} rows @ {stamp}", flush=True)
