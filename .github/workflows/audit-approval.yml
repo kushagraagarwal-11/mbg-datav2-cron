@@ -1,0 +1,25 @@
+name: CSPs Audit Approval refresh (hourly)
+
+on:
+  schedule:
+    # every hour at :37 (staggered off the Data V2 job at :17). Idempotent (clear + rewrite).
+    - cron: "37 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - name: Refresh CSPs Audit Approval
+        env:
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+          SUPABASE_TOKEN: ${{ secrets.SUPABASE_TOKEN }}
+          MB_KEY: ${{ secrets.MB_KEY }}
+          CSP_1076_B64: ${{ secrets.CSP_1076_B64 }}
+        run: python audit_approval_refresh.py
