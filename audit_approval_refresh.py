@@ -67,7 +67,18 @@ creds = (Credentials.from_service_account_info(json.loads(_sa), scopes=_SCOPES) 
          else Credentials.from_service_account_file(r"C:\Users\Palak Vardhan\dashboard\wiom-sheets-writer.json", scopes=_SCOPES))
 sh = gspread.authorize(creds).open_by_key(SHEET)
 ws = sh.get_worksheet(0)
-ws.clear(); ws.resize(rows=len(grid) + 5, cols=len(hdr))
+# This script OWNS columns A:I only. Column J ("Stage") and anything to its right
+# are MANUALLY maintained (a formula + hand-typed overrides) and MUST be preserved.
+# Do NOT ws.clear() (wipes the whole sheet) and do NOT resize cols down (that deletes
+# J/K). Clear only the A:I block, keep >=11 cols, then write A:I. The cohort is a fixed
+# 1076 rows in fixed order, so column J stays row-aligned with column A.
+MANAGED = "I"                                   # last column this script writes (A..I)
+need_rows = len(grid) + 5
+if ws.row_count < need_rows:
+    ws.add_rows(need_rows - ws.row_count)
+if ws.col_count < 11:                           # never shrink; guarantee J/K survive
+    ws.add_cols(11 - ws.col_count)
+ws.batch_clear([f"A1:{MANAGED}{ws.row_count}"])  # clears A:I only — J and beyond untouched
 ws.update(range_name="A1", values=grid, value_input_option="RAW")
 ws.format("A1:I1", {"textFormat": {"bold": True}})
-print(f"WROTE '{ws.title}': {len(grid)} rows @ {stamp}", flush=True)
+print(f"WROTE '{ws.title}': {len(grid)} rows @ {stamp} (cols A:I; column J preserved)", flush=True)
