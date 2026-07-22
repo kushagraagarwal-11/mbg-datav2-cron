@@ -52,12 +52,16 @@ print(f"audit done={sum(1 for p in pids if p in done)} | approved={sum(1 for p i
 # ---- 5) build + write ----
 yn = lambda b: "Yes" if b else "No"
 stamp = datetime.datetime.now(IST).strftime("%d-%b %H:%M IST")
-hdr = ["Partner ID", "CSP Name", "City", "Owner Mobile", "Admin Mobile", "Audit done?", "Consent form", "Consented on", f"(updated {stamp})"]
+# Columns A:H are computed here. Columns I ("DATA HANDED OVER TO PRODUCT") and
+# J ("Ordering Enabled") are MANUALLY maintained downstream — this script must NOT
+# write or clear them. (The old build also wrote an "(updated ...)" stamp into col I;
+# that collided with the manual column, so the stamp now lives in A1's cell note.)
+hdr = ["Partner ID", "CSP Name", "City", "Owner Mobile", "Admin Mobile", "Audit done?", "Consent form", "Consented on"]
 grid = [hdr]
 for r in rows:
     p = str(r["partner_account_id"]).strip()
     grid.append([p, r.get("csp_name", ""), city.get(p, ""), r.get("owner_mobile", ""), r.get("admin_mobile", ""),
-                 yn(p in done), yn(p in appr), appr.get(p, ""), ""])
+                 yn(p in done), yn(p in appr), appr.get(p, "")])
 
 import gspread
 from google.oauth2.service_account import Credentials
@@ -67,18 +71,20 @@ creds = (Credentials.from_service_account_info(json.loads(_sa), scopes=_SCOPES) 
          else Credentials.from_service_account_file(r"C:\Users\Palak Vardhan\dashboard\wiom-sheets-writer.json", scopes=_SCOPES))
 sh = gspread.authorize(creds).open_by_key(SHEET)
 ws = sh.get_worksheet(0)
-# This script OWNS columns A:I only. Column J ("Stage") and anything to its right
-# are MANUALLY maintained (a formula + hand-typed overrides) and MUST be preserved.
-# Do NOT ws.clear() (wipes the whole sheet) and do NOT resize cols down (that deletes
-# J/K). Clear only the A:I block, keep >=11 cols, then write A:I. The cohort is a fixed
-# 1076 rows in fixed order, so column J stays row-aligned with column A.
-MANAGED = "I"                                   # last column this script writes (A..I)
+# This script OWNS columns A:H only. Columns I ("DATA HANDED OVER TO PRODUCT") and
+# J ("Ordering Enabled") are MANUALLY maintained (values / formula + hand overrides)
+# and MUST be preserved. Never ws.clear() (wipes the whole sheet) and never resize
+# columns down (that deletes I/J). Clear only the A:H block, then write A:H. The cohort
+# is a fixed 1076 rows in fixed order, so columns I/J stay row-aligned with column A.
+MANAGED = "H"                                    # last column this script writes (A..H)
 need_rows = len(grid) + 5
 if ws.row_count < need_rows:
     ws.add_rows(need_rows - ws.row_count)
-if ws.col_count < 11:                           # never shrink; guarantee J/K survive
-    ws.add_cols(11 - ws.col_count)
-ws.batch_clear([f"A1:{MANAGED}{ws.row_count}"])  # clears A:I only — J and beyond untouched
+ws.batch_clear([f"A1:{MANAGED}{ws.row_count}"])  # clears A:H only — I, J untouched
 ws.update(range_name="A1", values=grid, value_input_option="RAW")
-ws.format("A1:I1", {"textFormat": {"bold": True}})
-print(f"WROTE '{ws.title}': {len(grid)} rows @ {stamp} (cols A:I; column J preserved)", flush=True)
+ws.format("A1:H1", {"textFormat": {"bold": True}})
+try:
+    ws.insert_note("A1", f"Auto-refreshed {stamp}")   # freshness stamp without a column
+except Exception:
+    pass
+print(f"WROTE '{ws.title}': {len(grid)} rows @ {stamp} (cols A:H; manual I & J preserved)", flush=True)
