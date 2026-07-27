@@ -144,6 +144,7 @@ BUCKET = ("CASE WHEN has_installed=1 THEN 'installed'"
   " WHEN last_state='CANCELLED_BY_CUSTOMER' AND reached_slot=1 THEN 'cust_cancel_after_slot'"
   " WHEN last_state='CANCELLED_BY_CUSTOMER' AND reached_slot=0 THEN 'cust_cancel_before_slot'"
   " WHEN last_state='INSTALLATION_REPORTED_FAILED' THEN 'install_failed'"
+  " WHEN last_state='CANCELLED_BY_UPSTREAM' AND rc='RETRY_EXHAUSTION' THEN 'csp_retryx'"   # CSP-fault: re-assigned until retry cap blew (~72% died from CSP no-show/timeout) — COUNTS in denom, matches poller csp_retryx (13-Jul fix)
   " WHEN last_state='CANCELLED_BY_UPSTREAM' THEN 'system_other'"
   " WHEN last_state='INSTALLATION_CANCELLED_ONSITE' THEN 'cancelled_onsite'"
   " WHEN last_state='INSTALLATION_EXPIRED' THEN 'install_expired'"   # S4 fix: expired install is TERMINAL, not open
@@ -285,6 +286,7 @@ def outcome(r):
     if b == "cust_cancel_after_slot": return "Customer cancelled (after confirming slot)"
     if b == "cust_cancel_before_slot": return "Customer cancelled (before confirming slot)"
     if b == "install_failed": return "Install attempt reported failed"
+    if b == "csp_retryx": return "CSP retries exhausted (no-show/timeout across attempts)"
     if b == "system_other": return "Cancelled upstream (system/ops)"
     if b == "cancelled_onsite": return "Cancelled on-site"
     return str(r[C["last_state"]])
@@ -409,7 +411,7 @@ add(["TOTAL", ct["Open"], ct["Terminal"], ct["Open"]+ct["Terminal"]]); mb_(); ad
 add(["LEGEND"]); mb_()
 add(["• Stage (LIVE) = computed from the live install data with the SAME settlement rule the app uses (installs ÷ cx-confirmed-closed denom; pending & cx-never-confirmed excluded). Matches the CSP's in-app screen and is fresher than the CleverTap profile snapshot (which can lag a few min — e.g. app shows Almost while the profile still reads Secured)."])
 add(["• Grain = one row per (lead × CSP): every lead offered to the CSP, incl re-routed-in and still-open leads. Scope = OPEN, or reached a terminal state in July."])
-add(["• 'Counts in the app as' (S4 SETTLEMENT — offered ≤16-Jul needs cx-confirmed slot; offered ≥17-Jul needs technician assigned): Install (लगे)=installed · मिले counted=gated lead that closed in July (in denom) · Pending (open)=still open, NOT in rate · Excluded=S4 gate not met, or system/upstream cancel, or closed before July."])
+add(["• 'Counts in the app as' (S4 SETTLEMENT — offered ≤16-Jul needs cx-confirmed slot; offered ≥17-Jul needs technician assigned): Install (लगे)=installed · मिले counted=gated lead that closed in July (in denom; includes RETRY_EXHAUSTION = CSP-fault retries-exhausted miss) · Pending (open)=still open, NOT in rate · Excluded=S4 gate not met, or genuine system/upstream cancel (NOT retry-exhaustion), or closed before July."])
 add(["• RATE = installs ÷ denom (denom = installs + मिले-counted). Open/pending & cx-never-confirmed are NOT in the rate — a CSP with many open leads can still be 'Secured'."])
 add(["• Re-offers: everything shown ('Flow stage', all timestamps, Outcome) is the CURRENT/latest ticket only. '# tickets'=attempts at THIS CSP; 'Prior attempt' = previous ticket's furthest stage → why re-triggered; '# CSPs offered to' = distinct CSPs the customer touched overall."]); add()
 DHDR = ["Stage (LIVE)", "CSP Name", "CSP ID", "CSP Owner Mobile", "CSP Admin/Mgr Mobile", "Install ID (current)",
