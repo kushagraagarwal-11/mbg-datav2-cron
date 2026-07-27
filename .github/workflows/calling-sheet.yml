@@ -1,0 +1,26 @@
+name: PSAT Calling Sheet daily push
+
+on:
+  schedule:
+    # 09:00 IST = 03:30 UTC (primary). :30 avoids top-of-hour cron congestion.
+    - cron: "30 3 * * *"
+    # 12:00 IST = 06:30 UTC (backup, in case GitHub drops/delays the 09:00 run).
+    # The push is idempotent (dedup by ticket+phone) so a second run just no-ops.
+    - cron: "30 6 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - name: Run PSAT calling sheet push
+        env:
+          MB_KEY: ${{ secrets.MB_KEY }}
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+        run: python calling_sheet_push.py

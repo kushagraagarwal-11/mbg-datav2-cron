@@ -7,7 +7,9 @@ Creds from env (GitHub Actions secrets); falls back to local files for laptop ru
 import os, json, base64, csv, io, gzip, datetime, urllib.request as U
 HERE = os.path.dirname(os.path.abspath(__file__))
 SUPA = os.environ.get("SUPABASE_TOKEN") or open(os.path.join(HERE, "..", "mbg-cron", "supabase_token.txt")).read().strip()
-MB_KEY = os.environ.get("MB_KEY") or "mb_1dsbxsJfyROPsVyNpifJ8hTTlIDG85+qNKRo91KDnb4="
+MB_KEY = os.environ.get("MB_KEY")  # PUBLIC repo — never hardcode; provided via MB_KEY secret
+if not MB_KEY:
+    raise SystemExit("MB_KEY not set — provide it via the MB_KEY env var / GitHub secret.")
 AUDIT, APPROVAL = "gonqnxpdtvjydppbrnie", "oobaxfbsmqhdaligebmg"
 MGCAMP = "108a08d1-749a-4236-a0e9-fd4f1d3c6a27"
 SHEET = "1iUiiXEhyHqh-P5XgUQptnQM81wkbUcj45v43_kfNHEc"
