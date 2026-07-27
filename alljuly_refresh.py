@@ -11,7 +11,7 @@ TOKEN = os.environ.get("SUPABASE_TOKEN") or open(os.path.join(HERE, "supabase_to
 MB_KEY = os.environ["MB_KEY"]                     # GitHub Actions secret (Metabase API key)
 CT_ACC, CT_PASS, CTB = "44Z-644-777Z", os.environ["CT_PASS"], "https://eu1.api.clevertap.com"  # passcode from secret
 AUDIT, MG = "gonqnxpdtvjydppbrnie", "108a08d1-749a-4236-a0e9-fd4f1d3c6a27"
-MS, GATE = "2026-07-01", 0.60
+MS, GATE, CUT = "2026-07-01", 0.60, "2026-07-16"   # S4 denom: cx-confirmed if lead OFFERED <= CUT (16-Jul), else technician-assigned
 SHEET_ID, TAB_GID = "132jlUraAFH02wjkXvcXLX6pY-nD4m6Xu5Jkjl7Awnqs", 499920107
 IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
 IEC = "PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.INSTALL_EXECUTION_CANDIDATES"
@@ -146,6 +146,7 @@ BUCKET = ("CASE WHEN has_installed=1 THEN 'installed'"
   " WHEN last_state='INSTALLATION_REPORTED_FAILED' THEN 'install_failed'"
   " WHEN last_state='CANCELLED_BY_UPSTREAM' THEN 'system_other'"
   " WHEN last_state='INSTALLATION_CANCELLED_ONSITE' THEN 'cancelled_onsite'"
+  " WHEN last_state='INSTALLATION_EXPIRED' THEN 'install_expired'"   # S4 fix: expired install is TERMINAL, not open
   " ELSE 'open' END")
 
 def base_sql(grp):
@@ -244,12 +245,24 @@ def cohort(r):
 def status(r):
     if r[C["has_installed"]] == 1: return "Terminal"
     return "Terminal" if r[C["last_state"]] in TERMINAL_STATES else "Open"
+def _off_date(r):
+    ts = r[C["t_offered"]]
+    if not ts: return ""
+    try:
+        dt = datetime.datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        if dt.tzinfo is None: dt = dt.replace(tzinfo=datetime.timezone.utc)
+        return dt.astimezone(IST).date().isoformat()
+    except Exception: return str(ts)[:10]
+def gate_ok(r):
+    # S4 denom gate: lead OFFERED (CSP) on/before 16-Jul must have a cx-confirmed slot; offered >=17-Jul must have a technician assigned.
+    if _off_date(r) <= CUT: return r[C["reached_slot"]] == 1
+    return bool(r[C["t_tech"]])
 def treatment(r):
-    b = r[C["bucket"]]; rs = r[C["reached_slot"]] == 1; ld = (r[C["last_date"]] or "") >= MS
+    b = r[C["bucket"]]; ld = (r[C["last_date"]] or "") >= MS
     if b == "open": return "Pending (open, not in rate)"
     if b == "system_other": return "Excluded — system/upstream cancel"
     if not ld: return "Excluded — closed before Jul"
-    if not rs: return "Excluded — cx never confirmed slot"
+    if not gate_ok(r): return "Excluded — S4 gate not met (cx≤16-Jul / tech≥17-Jul)"
     if b == "installed": return "Install (लगे)"
     return "मिले counted (denom)"
 OPEN_TXT = {"AWAITING_SLOT_PROPOSAL": "Open — CSP yet to propose slot", "SLOT_SELECTED": "Open — awaiting cx to confirm slot",
@@ -359,7 +372,7 @@ vals, bold, fillh = [], [], []
 def add(row=None): vals.append(row or [])
 def mb_(): bold.append(len(vals)-1)
 add([f"ALL July leads per CSP — EVERY lead offered to the CSP (incl re-routed-in & OPEN). STAGE computed LIVE from the install pipeline using the app's settlement rule (matches the CSP's in-app screen). Auto-refreshed hourly. All times IST. {len(rows)} leads · {DATED}."]); mb_(); add()
-add(["SUMMARY A — how the LIVE app counts each lead. मिले (denom) = settlement: customer must have CONFIRMED a slot; OPEN/pending is NOT in the rate."]); mb_()
+add(["SUMMARY A — how the LIVE app counts each lead. मिले (denom) = S4 settlement: lead OFFERED ≤16-Jul must have a cx-CONFIRMED slot, OFFERED ≥17-Jul must have a TECHNICIAN ASSIGNED; only leads TERMINAL in July count; OPEN/pending is NOT in the rate."]); mb_()
 add(["Stage (live app)", "Installs (लगे)", "मिले other-closed", "मिले TOTAL (denom)", "Rate %", "Pending (open, not in rate)", "Excluded from rate", "Grand Total"]); mb_(); fillh.append(len(vals)-1)
 def arow(a):
     inst, mc, pend, excl = a["inst"], a["milecl"], a["pend"], a["excl"]; den = inst+mc
@@ -396,7 +409,7 @@ add(["TOTAL", ct["Open"], ct["Terminal"], ct["Open"]+ct["Terminal"]]); mb_(); ad
 add(["LEGEND"]); mb_()
 add(["• Stage (LIVE) = computed from the live install data with the SAME settlement rule the app uses (installs ÷ cx-confirmed-closed denom; pending & cx-never-confirmed excluded). Matches the CSP's in-app screen and is fresher than the CleverTap profile snapshot (which can lag a few min — e.g. app shows Almost while the profile still reads Secured)."])
 add(["• Grain = one row per (lead × CSP): every lead offered to the CSP, incl re-routed-in and still-open leads. Scope = OPEN, or reached a terminal state in July."])
-add(["• 'Counts in the app as' (SETTLEMENT — customer must have CONFIRMED a slot): Install (लगे)=installed · मिले counted=cx-confirmed lead that closed (in denom) · Pending (open)=still open, NOT in rate · Excluded=cx NEVER confirmed a slot, or system/upstream cancel, or closed before July."])
+add(["• 'Counts in the app as' (S4 SETTLEMENT — offered ≤16-Jul needs cx-confirmed slot; offered ≥17-Jul needs technician assigned): Install (लगे)=installed · मिले counted=gated lead that closed in July (in denom) · Pending (open)=still open, NOT in rate · Excluded=S4 gate not met, or system/upstream cancel, or closed before July."])
 add(["• RATE = installs ÷ denom (denom = installs + मिले-counted). Open/pending & cx-never-confirmed are NOT in the rate — a CSP with many open leads can still be 'Secured'."])
 add(["• Re-offers: everything shown ('Flow stage', all timestamps, Outcome) is the CURRENT/latest ticket only. '# tickets'=attempts at THIS CSP; 'Prior attempt' = previous ticket's furthest stage → why re-triggered; '# CSPs offered to' = distinct CSPs the customer touched overall."]); add()
 DHDR = ["Stage (LIVE)", "CSP Name", "CSP ID", "CSP Owner Mobile", "CSP Admin/Mgr Mobile", "Install ID (current)",
