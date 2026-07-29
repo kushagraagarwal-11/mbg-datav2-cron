@@ -4,7 +4,7 @@ Self-contained (stdlib + gspread/google-auth). Reads creds from this folder. Lau
 Grain = one row per (connection, CSP): EVERY lead offered to the CSP (incl re-routed-in + OPEN), scope =
 open OR terminal-in-July. STAGE + rate = the CSP's LIVE app values (CleverTap mbg_*). Per-lead 'counts as'
 = the app's SETTLEMENT denom (customer must have confirmed a slot; pending EXCLUDED from rate)."""
-import os, json, datetime, urllib.request as U
+import os, json, time, datetime, urllib.request as U
 from collections import Counter
 HERE = os.path.dirname(os.path.abspath(__file__))
 TOKEN = os.environ.get("SUPABASE_TOKEN") or open(os.path.join(HERE, "supabase_token.txt")).read().strip()
@@ -29,9 +29,16 @@ def mb(q):
     req = U.Request("https://metabase.wiom.in/api/dataset",
         data=json.dumps({"database": 113, "type": "native", "native": {"query": q}}).encode(),
         headers={"x-api-key": MB_KEY, "Content-Type": "application/json"})
-    j = json.loads(U.urlopen(req, timeout=200).read().decode())
-    if not j.get("data"): raise SystemExit("MB ERR " + json.dumps(j)[:400])
-    return j["data"]["rows"]
+    last = ""
+    for att in range(3):   # WH now kills queries queued >300s ("SQL execution canceled") — retry instead of aborting the run
+        try:
+            j = json.loads(U.urlopen(req, timeout=600).read().decode())
+        except Exception as e:
+            last = str(e)[:300]; time.sleep(20 * (att + 1)); continue
+        if j.get("data"): return j["data"]["rows"]
+        last = json.dumps(j)[:400]
+        time.sleep(20 * (att + 1))
+    raise SystemExit("MB ERR " + last)
 
 def fmt(ts):
     if not ts: return ""
@@ -211,21 +218,23 @@ conns = sorted(set(r[C["conn"]] for r in rows))
 rep_ecids = sorted(set(r[C["rep_ecid"]] for r in rows if r[C["rep_ecid"]]))
 all_ecids = sorted({e for r in rows for e in ecids_of(r)})
 reoff, firstoff = {}, {}
-for grp in chunks(conns, 120):
+NCH = 1500  # each lookup returns <=1 row per key, so 1500 stays under Metabase's ~2000-row cap; 120 fired ~270 queries/run and saturated METABASE_WH (28-Jul)
+LO = (datetime.date.fromisoformat(MS) - datetime.timedelta(days=90)).isoformat()  # events scan floor: no in-scope attempt predates MS-90d
+for grp in chunks(conns, NCH):
     ci = "','".join(grp)
     for r in mb(f"select connection_id, count(distinct csp_id), MIN_BY(csp_id,created_at) FROM {IEC} where connection_id in ('{ci}') group by 1"):
         reoff[r[0]] = r[1]; firstoff[r[0]] = r[2]
 mob, addr = {}, {}
-for grp in chunks(rep_ecids, 120):
+for grp in chunks(rep_ecids, NCH):
     fi = "','".join(grp)
     for r in mb(f"select EXECUTION_CANDIDATE_ID, MAX(MOBILE), MAX(ADDRESS) from {TV} where EXECUTION_CANDIDATE_ID in ('{fi}') group by 1"):
         mob[r[0]] = r[1] or ""; addr[r[0]] = r[2] or ""
 fpn_e, tcall_e = {}, {}
-for grp in chunks(all_ecids, 120):
+for grp in chunks(all_ecids, NCH):
     fi = "','".join(grp)
-    for r in mb(f"select TRY_PARSE_JSON(PROPERTIES):execution_id::string, MIN(TIMESTAMP) from {CT}.EVENTS_DATA where EVENT_NAME='fpn_delivered' and TRY_PARSE_JSON(PROPERTIES):execution_id::string in ('{fi}') group by 1"):
+    for r in mb(f"select TRY_PARSE_JSON(PROPERTIES):execution_id::string, MIN(TIMESTAMP) from {CT}.EVENTS_DATA where TIMESTAMP >= '{LO}' and EVENT_NAME='fpn_delivered' and TRY_PARSE_JSON(PROPERTIES):execution_id::string in ('{fi}') group by 1"):
         if r[0]: fpn_e[r[0]] = r[1]
-    for r in mb(f"select TRY_PARSE_JSON(e.PROPERTIES):execution_id::string, MIN(e.TIMESTAMP) from {CT}.EVENTS_DATA e JOIN {CT}.PROFILE_DATA p ON e.CLEVERTAP_ID=p.CLEVERTAP_ID where e.EVENT_NAME='call_initiated' and UPPER(COALESCE(p.ROLE,''))='TECHNICIAN' and TRY_PARSE_JSON(e.PROPERTIES):execution_id::string in ('{fi}') group by 1"):
+    for r in mb(f"select TRY_PARSE_JSON(e.PROPERTIES):execution_id::string, MIN(e.TIMESTAMP) from {CT}.EVENTS_DATA e JOIN {CT}.PROFILE_DATA p ON e.CLEVERTAP_ID=p.CLEVERTAP_ID where e.TIMESTAMP >= '{LO}' and e.EVENT_NAME='call_initiated' and UPPER(COALESCE(p.ROLE,''))='TECHNICIAN' and TRY_PARSE_JSON(e.PROPERTIES):execution_id::string in ('{fi}') group by 1"):
         if r[0]: tcall_e[r[0]] = r[1]
 
 # ---------- 5) classification (current ticket + settlement) ----------
