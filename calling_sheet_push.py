@@ -251,6 +251,114 @@ def push_to_sheet(cols, rows):
     )
 
 
+# Folders that mean "this should never be in the sheet". Kapture frequently
+# re-tags a ticket into one of these AFTER the append has already captured it as
+# L1/L2/NewProject; the append-only push never revisits the row, so it strands
+# stale. Reconcile FLAGS these (does NOT delete — deleting would shift the team's
+# manual columns I:L out of alignment).
+EXCLUDED_FOLDERS = {
+    "Duplicate Tickets": "REMOVED - Duplicate",
+    "Not Pick / Unreachable / Switched Off / Call by Mistake": "REMOVED - Not Pick",
+}
+
+# Current disposition of specific tickets — looked up by explicit Ticket ID (NO
+# exclusion filter, so we can also SEE the ones now tagged Duplicate/Not-Pick).
+# Queried by ID (not by date window) so it never hits Metabase's ~2000-row cap:
+# each batch of IDs returns at most one row per ID. {ids} = comma-separated ints.
+RECONCILE_SQL_TMPL = r"""
+SELECT k.TICKET_NO, k.DISPOSED_FOLDER AS FOLDER,
+  CASE
+    WHEN k.DISPOSED_FOLDER = 'New Project' THEN 'NewProject'
+    WHEN k.SUB_STATUS = 'Resolved on Call' THEN 'L1'
+    WHEN k.SUB_STATUS IN ('Completed','Resolved')
+         AND (k.DISPOSED_FOLDER IS NULL OR k.DISPOSED_FOLDER != 'New Project') THEN 'L2'
+    ELSE NULL END AS BUCKET
+FROM PROD_DB.PUBLIC.KAPTURE_PARTNER_TICKETS_REPORT k
+WHERE k.TICKET_NO IN ({ids})
+  AND k.STATUS = 'Complete'
+  AND k.TICKET_TYPE_PARENT_SUB = 'Parent Ticket'
+QUALIFY ROW_NUMBER() OVER (PARTITION BY k.TICKET_NO ORDER BY k.INGESTED_AT DESC NULLS LAST) = 1
+"""
+
+
+def reconcile_recent(ws=None, lookback_rows=2000):
+    """Re-check recently-captured rows against CURRENT Kapture disposition and fix
+    column G (Bucket) in place. The append-only push freezes a row at capture and
+    never revisits it, so a ticket re-dispositioned afterwards (L1<->NewProject
+    re-bucketing, or moved into an excluded folder like 'Duplicate Tickets' /
+    'Not Pick') stays wrong forever otherwise.
+      - bucket changed among L1 / L2 / NewProject -> rewrite G to the new bucket
+      - now in an excluded folder                 -> flag G as 'REMOVED - <reason>'
+      - no longer qualifying (e.g. reopened)       -> left as-is (conservative)
+    Only column G is written; manual columns I:L are never touched. Row numbers
+    are derived from a single fresh read taken immediately before the write, so
+    there is no drift between matching a Ticket ID and writing its bucket. Scope is
+    the last `lookback_rows` rows (append order is chronological, ~110 rows/day),
+    and Kapture is queried by explicit Ticket ID in chunks so the lookup never
+    hits Metabase's ~2000-row native-query cap."""
+    if ws is None:
+        scopes = ["https://www.googleapis.com/auth/spreadsheets",
+                  "https://www.googleapis.com/auth/drive"]
+        creds = Credentials.from_service_account_file(SA_JSON, scopes=scopes)
+        ws = gspread.authorize(creds).open_by_key(SHEET_ID).worksheet(TAB_NAME)
+
+    grid = ws.get("A2:H")  # fresh read; sheet row (i+2) == grid[i]
+    stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # Scope to the most recent rows (bottom of an append-ordered sheet) and collect
+    # their numeric ticket ids. Bounds the Kapture lookup to just these tickets.
+    start = max(0, len(grid) - lookback_rows)
+    tickets = sorted({
+        grid[i][7].strip()
+        for i in range(start, len(grid))
+        if len(grid[i]) >= 8 and grid[i][7].strip().isdigit()
+    })
+    if not tickets:
+        print(f"[{stamp}] Reconcile: no ticketed rows in scope.")
+        return
+
+    # Look up current disposition by id, chunked to stay well under the 2000 cap.
+    kap = {}
+    CHUNK = 800
+    for j in range(0, len(tickets), CHUNK):
+        ids = ",".join(tickets[j:j + CHUNK])
+        _, krows = _run_sql(RECONCILE_SQL_TMPL.format(ids=ids))
+        for t, folder, bucket in krows:
+            kap[str(t).strip()] = (folder, bucket)
+
+    updates = []
+    rebucketed = flagged = 0
+    for i, r in enumerate(grid):
+        if len(r) < 8:
+            continue
+        tid = r[7].strip()
+        cur = r[6].strip()
+        if not tid or tid not in kap:
+            continue
+        folder, newb = kap[tid]
+        if folder in EXCLUDED_FOLDERS:
+            target = EXCLUDED_FOLDERS[folder]
+        elif newb in ("L1", "L2", "NewProject"):
+            target = newb
+        else:
+            continue  # no longer qualifying — leave as-is
+        if target == cur:
+            continue
+        updates.append({"range": f"G{i + 2}", "values": [[target]]})
+        if target.startswith("REMOVED"):
+            flagged += 1
+        else:
+            rebucketed += 1
+
+    stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if updates:
+        ws.batch_update(updates, value_input_option="USER_ENTERED")
+        print(f"[{stamp}] Reconciled {len(updates)} rows "
+              f"({rebucketed} re-bucketed, {flagged} flagged REMOVED).")
+    else:
+        print(f"[{stamp}] Reconcile: no stale rows found.")
+
+
 SUMMARY_SQL = r"""
 WITH ist AS (
     SELECT CONVERT_TIMEZONE('UTC','Asia/Kolkata',CURRENT_TIMESTAMP())::DATE AS today
@@ -741,6 +849,7 @@ def refresh_summary():
 def main():
     cols, rows = run_query()
     push_to_sheet(cols, rows)
+    reconcile_recent()   # fix rows whose Kapture disposition changed after capture
     refresh_summary()
 
 
@@ -767,6 +876,7 @@ if __name__ == "__main__":
                 print(f"[{stamp}] Yesterday's data not in sheet yet — pushing first.")
                 cols, rows = run_query()
                 push_to_sheet(cols, rows)
+            reconcile_recent()   # keep buckets/duplicates in sync on every refresh
             refresh_summary()
         else:
             main()

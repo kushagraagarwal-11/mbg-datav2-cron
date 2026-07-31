@@ -2,11 +2,11 @@ name: PSAT Calling Sheet daily push
 
 on:
   schedule:
-    # 09:00 IST = 03:30 UTC (primary). :30 avoids top-of-hour cron congestion.
-    - cron: "30 3 * * *"
-    # 12:00 IST = 06:30 UTC (backup, in case GitHub drops/delays the 09:00 run).
+    # 04:00 IST = 22:30 UTC (previous day) — primary. :30 avoids top-of-hour cron congestion.
+    - cron: "30 22 * * *"
+    # 07:00 IST = 01:30 UTC — backup, in case GitHub drops/delays the 04:00 run.
     # The push is idempotent (dedup by ticket+phone) so a second run just no-ops.
-    - cron: "30 6 * * *"
+    - cron: "30 1 * * *"
   workflow_dispatch: {}
 
 jobs:
