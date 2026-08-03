@@ -104,7 +104,8 @@ kapture_base AS (
     AND k.TICKET_TYPE_PARENT_SUB = 'Parent Ticket'
     AND k.SUB_STATUS NOT IN ('Customer Replied','Unattended','Replied')
     AND (k.DISPOSED_FOLDER IS NULL OR k.DISPOSED_FOLDER NOT IN
-         ('Not Pick / Unreachable / Switched Off / Call by Mistake', 'Duplicate Tickets'))
+         ('Not Pick / Unreachable / Switched Off / Call by Mistake', 'Duplicate Tickets',
+          'Want partnership of wiom'))
     AND (k.CUSTOMER_NAME IS NULL OR UPPER(k.CUSTOMER_NAME) != 'SANJAY_WIOM_TEST_ACCOUNT')
   QUALIFY ROW_NUMBER() OVER (PARTITION BY k.TICKET_NO ORDER BY k.INGESTED_AT DESC NULLS LAST) = 1
 ),
@@ -259,6 +260,7 @@ def push_to_sheet(cols, rows):
 EXCLUDED_FOLDERS = {
     "Duplicate Tickets": "REMOVED - Duplicate",
     "Not Pick / Unreachable / Switched Off / Call by Mistake": "REMOVED - Not Pick",
+    "Want partnership of wiom": "REMOVED - Want partnership",  # prospective-partner enquiries, not support
 }
 
 # Current disposition of specific tickets — looked up by explicit Ticket ID (NO
