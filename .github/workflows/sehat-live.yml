@@ -1,0 +1,27 @@
+name: Sehat MG Live refresh (daily)
+
+on:
+  schedule:
+    # 09:00 IST = 03:30 UTC — primary daily refresh
+    - cron: "30 3 * * *"
+    # 12:00 IST = 06:30 UTC — backup, in case GitHub drops/delays the 09:00 run.
+    # The write is idempotent (clear + rewrite), so a second run just refreshes again.
+    - cron: "30 6 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - name: Refresh Sehat MG Live (enrolled-only optical + SLA)
+        env:
+          MB_KEY: ${{ secrets.MB_KEY }}
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+          CT_PASS: ${{ secrets.CT_PASS }}
+        run: python sehat_live_push.py
