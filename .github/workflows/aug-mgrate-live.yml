@@ -1,0 +1,26 @@
+name: MG rate — August live refresh (daily)
+
+on:
+  schedule:
+    # 08:00 IST = 02:30 UTC — primary daily refresh of the August columns (L:O)
+    - cron: "30 2 * * *"
+    # 11:00 IST = 05:30 UTC — backup, in case GitHub drops/delays the primary run.
+    # The write only overwrites L:O (idempotent), so a second run just refreshes again.
+    - cron: "30 5 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - name: Refresh August columns in MG rate tab (matured >=48h)
+        env:
+          MB_KEY: ${{ secrets.MB_KEY }}
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+        run: python aug_live_refresh.py
