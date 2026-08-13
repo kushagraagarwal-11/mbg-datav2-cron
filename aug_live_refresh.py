@@ -153,8 +153,10 @@ def main():
         else:
             continue
         r1 = i + 1
-        rng = f"{colletter(aug_start)}{r1}:{colletter(aug_start + 3)}{r1}"
-        updates.append({"range": rng, "values": [vals]})
+        # write only tech/inst/% (L:N). Col O (Aug Δ vs MayJun %) and P (Base/CSP)
+        # are live sheet formulas (=N/I-1, =ROUND(C/B)) — do NOT overwrite them.
+        rng = f"{colletter(aug_start)}{r1}:{colletter(aug_start + 2)}{r1}"
+        updates.append({"range": rng, "values": [vals[:3]]})
         wrote += 1
 
     # header timestamp
@@ -164,7 +166,7 @@ def main():
     if not base:
         base = "MG INSTALL RATE"
     updates.append({"range": "A1", "values": [[
-        base + f"  [LIVE: Aug cols L:O auto-refresh 24h; matured>=48h; last run {now:%Y-%m-%d %H:%M IST}]"]]})
+        base + f"  [LIVE: Aug cols L:N auto-refresh 24h (O=Δ% & P=Base/CSP are live formulas); matured>=48h; last run {now:%Y-%m-%d %H:%M IST}]"]]})
 
     ws.batch_update(updates, value_input_option="RAW")
     print(f"wrote {wrote} rows across {len(tables)} tables; {len(updates)} ranges. OK {now:%Y-%m-%d %H:%M IST}", flush=True)
