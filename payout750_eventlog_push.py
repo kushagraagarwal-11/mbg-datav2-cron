@@ -3,10 +3,13 @@
 
 Pulls every Payout750 event (Viewed / Progress / Confirmed / Declined / Closed) from the
 CleverTap Events Export and writes:
-  - "Event Log"  : one row per event, all properties (funnel + per-block dwell + choice + consent).
-  - "Summary"    : live funnel counts + opt-in rate, overall and per flow.
+  - "Event Log"  : one row per event, all properties + flow_assigned (from the Design cohort map).
+  - "Summary"    : live funnel counts + opt-in rate, overall and per assigned flow.
 
-Env: CT_PASS, GOOGLE_SA_JSON (or local SA file). Optional: P750_LOG_SHEET_ID, P750_FROM.
+flow_assigned comes from the "Different flows for 750" Design tab (cspid -> Flow), so events are
+attributable to Flow 1/2/3 even when the live HTML doesn't stamp the `flow` property.
+
+Env: CT_PASS, GOOGLE_SA_JSON (or local SA file). Optional: P750_LOG_SHEET_ID, P750_DESIGN_SHEET_ID, P750_FROM.
 """
 import os, sys, json, time, tempfile, urllib.request, datetime
 sys.stdout.reconfigure(encoding="utf-8")
@@ -21,6 +24,7 @@ CT      = f"https://{REGION}.api.clevertap.com"
 HP = {"X-CleverTap-Account-Id": CT_ACC, "X-CleverTap-Passcode": CT_PASS, "Content-Type": "application/json; charset=utf-8"}
 HG = {"X-CleverTap-Account-Id": CT_ACC, "X-CleverTap-Passcode": CT_PASS}
 SHEET_ID = os.environ.get("P750_LOG_SHEET_ID", "1ap0K6GB6RijeLHRWPf9N84U0cl1XEJs67DSQBql7sGQ")
+DESIGN_SHEET_ID = os.environ.get("P750_DESIGN_SHEET_ID", "1SfWil0SaN1lKPTqtTF86edoPk8lT1BxzNzB6vC0_4Yc")
 IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
 BLOCKS = ["hero", "timeline", "scenarios", "keypoints", "choice"]
 EVENTS = ["Payout750_Viewed", "Payout750_Progress", "Payout750_Confirmed", "Payout750_Declined", "Payout750_Closed"]
@@ -55,6 +59,26 @@ def creds():
     raise SystemExit("no SA creds")
 
 
+def norm_flow(s):
+    s = (s or "").strip().lower().replace("flow", "").strip()
+    return s if s in ("1", "2", "3") else ""
+
+
+def load_design(gc):
+    """cspid -> assigned flow ('1'/'2'/'3') from the Design tab."""
+    try:
+        ws = gc.open_by_key(DESIGN_SHEET_ID).worksheet("Design")
+        vals = ws.get_all_values()
+    except Exception as e:
+        print("  design load failed:", str(e)[:80], flush=True); return {}
+    m = {}
+    for r in vals[1:]:
+        r = (r + [""] * 6)[:6]
+        cid = r[0].strip()
+        if cid: m[cid] = norm_flow(r[5])
+    return m
+
+
 def cid_of(r):
     pd = r.get("profile", {}).get("profileData", {}) or {}
     return (pd.get("cspid") or "").strip() or ("id:" + str(r.get("profile", {}).get("identity", "")))
@@ -67,62 +91,62 @@ def fmt_ts(ts):
 
 
 def main():
+    gc = gspread.authorize(creds())
+    ss = gc.open_by_key(SHEET_ID)
+    design = load_design(gc)
+    print(f"design map: {len(design)} CSPs", flush=True)
+
     frm = int(os.environ.get("P750_FROM", "20260817"))
     to = int((datetime.datetime.now(IST) + datetime.timedelta(days=1)).strftime("%Y%m%d"))
-    rows = []          # event-log rows
-    seen = set()       # dedupe (event, cspid, ts, choice/milestone)
+    rows = []; seen = set()
     funnel = Counter(); by_flow = {}; csps = set()
+    def bf(flow):
+        return by_flow.setdefault(flow or "(unmapped)", Counter())
     for ev in EVENTS:
         short = ev.replace("Payout750_", "")
         for r in export(ev, frm, to):
             ep = r.get("event_props", {}) or {}
-            c = cid_of(r); ts = str(r.get("ts", "")); flow = str(ep.get("flow", ""))
+            c = cid_of(r); ts = str(r.get("ts", "")); flow = norm_flow(str(ep.get("flow", "")))
             mil = ep.get("milestone", ""); choice = ep.get("choice", "")
             key = (short, c, ts, mil, choice)
             if key in seen: continue
-            seen.add(key)
-            csps.add(c)
-            # funnel accounting
-            if short == "Viewed": funnel["viewed"] += 1
+            seen.add(key); csps.add(c)
+            fa = design.get(c, "") or flow            # assigned flow: Design first, else event's own
+            if short == "Viewed": funnel["viewed"] += 1; bf(fa)["viewed"] += 1
             elif short == "Progress" and mil == "content_opened": funnel["opened"] += 1
             elif short == "Progress" and mil == "reached_choice": funnel["reached_choice"] += 1
-            elif short == "Confirmed": funnel["confirmed"] += 1
-            elif short == "Declined": funnel["declined"] += 1
+            elif short == "Confirmed": funnel["confirmed"] += 1; bf(fa)["confirmed"] += 1
+            elif short == "Declined": funnel["declined"] += 1; bf(fa)["declined"] += 1
             elif short == "Closed": funnel["closed"] += 1
-            bf = by_flow.setdefault(flow or "(none)", Counter())
-            if short in ("Confirmed",): bf["confirmed"] += 1
-            if short in ("Declined",): bf["declined"] += 1
-            if short == "Viewed": bf["viewed"] += 1
-            rows.append([fmt_ts(ts), c, short, flow, mil, choice] +
+            rows.append([fmt_ts(ts), c, short, fa, flow, mil, choice] +
                         [ep.get("sec_" + b, "") for b in BLOCKS] +
                         [ep.get("max_block", ""), ep.get("seconds", ""), ep.get("lang", ""),
                          ep.get("lang_toggles", ""), ep.get("selection_changes", ""),
                          ep.get("last_selected", ""), ep.get("exit", ""),
                          ep.get("api_status", ""), ep.get("api_error", "")])
     rows.sort(key=lambda x: x[0])
-    print(f"events: {len(rows)}  csps: {len([c for c in csps])}  funnel: {dict(funnel)}", flush=True)
+    print(f"events: {len(rows)}  csps: {len(csps)}  funnel: {dict(funnel)}", flush=True)
 
-    hdr = (["timestamp (IST)", "cspid", "event", "flow", "milestone", "choice"] +
+    hdr = (["timestamp (IST)", "cspid", "event", "flow_assigned", "flow_tag", "milestone", "choice"] +
            ["sec_" + b for b in BLOCKS] +
            ["max_block", "seconds", "lang", "lang_toggles", "selection_changes", "last_selected", "exit", "api_status", "api_error"])
     now = datetime.datetime.now(IST)
     banner = [f"PAYOUT750 EVENT LOG — every tracked event from CleverTap. {len(rows)} events · {len(csps)} CSPs. "
               f"Funnel: {funnel['viewed']} viewed → {funnel['opened']} opened → {funnel['reached_choice']} reached choice → "
-              f"{funnel['confirmed']} opted-in / {funnel['declined']} declined. Last refresh {now:%Y-%m-%d %H:%M IST} (CleverTap export lags a few hrs)."]
+              f"{funnel['confirmed']} opted-in / {funnel['declined']} declined. flow_assigned = from Design cohort map (cspid→Flow). "
+              f"Last refresh {now:%Y-%m-%d %H:%M IST} (CleverTap export lags ~1 hr)."]
 
-    gc = gspread.authorize(creds()); ss = gc.open_by_key(SHEET_ID)
-    # Event Log = the first tab (gid 0), so the shared link opens straight to the data
+    # Event Log = first tab (gid 0) so the shared link opens straight to the data
     try:
         ws = ss.worksheet("Event Log")
     except gspread.WorksheetNotFound:
-        ws = ss.sheet1
-        try: ws.update_title("Event Log")
+        try: ws = ss.sheet1; ws.update_title("Event Log")
         except Exception: ws = ss.add_worksheet("Event Log", rows=max(200, len(rows) + 10), cols=len(hdr))
     ws.clear()
     ws.update(values=[banner] + [[""] * len(hdr)] + [hdr] + rows, range_name="A1", value_input_option="RAW")
     ws.format(f"A3:{chr(64+len(hdr))}3", {"textFormat": {"bold": True}})
 
-    # Summary tab
+    # Summary
     optrate = round(100 * funnel["confirmed"] / (funnel["confirmed"] + funnel["declined"])) if (funnel["confirmed"] + funnel["declined"]) else 0
     summ = [["PAYOUT750 SUMMARY", f"updated {now:%Y-%m-%d %H:%M IST}"], [""],
             ["Funnel", "count"],
@@ -134,16 +158,19 @@ def main():
             ["Closed (terminal)", funnel["closed"]],
             ["Opt-in rate (of deciders)", f"{optrate}%"],
             ["Unique CSPs", len(csps)], [""],
-            ["By flow", "viewed", "opted-in", "declined"]]
-    for f in sorted(by_flow):
-        b = by_flow[f]; summ.append([f, b.get("viewed", 0), b.get("confirmed", 0), b.get("declined", 0)])
+            ["By flow (assigned from Design)", "viewed", "opted-in", "declined", "opt-in %"]]
+    for f in ["1", "2", "3"] + [x for x in sorted(by_flow) if x not in ("1", "2", "3")]:
+        if f not in by_flow: continue
+        b = by_flow[f]; dec = b.get("confirmed", 0) + b.get("declined", 0)
+        summ.append([("Flow " + f) if f in ("1", "2", "3") else f, b.get("viewed", 0), b.get("confirmed", 0), b.get("declined", 0),
+                     f"{round(100*b.get('confirmed',0)/dec)}%" if dec else "-"])
     try: ws2 = ss.worksheet("Summary")
     except gspread.WorksheetNotFound: ws2 = ss.add_worksheet("Summary", rows=40, cols=6)
     ws2.clear()
     ws2.update(values=summ, range_name="A1", value_input_option="RAW")
     ws2.format("A1:B1", {"textFormat": {"bold": True, "fontSize": 12}})
-    ws2.format("A3:D3", {"textFormat": {"bold": True}})
-    ws2.format("A13:D13", {"textFormat": {"bold": True}})
+    ws2.format("A3:E3", {"textFormat": {"bold": True}})
+    ws2.format("A13:E13", {"textFormat": {"bold": True}})
     print(f"wrote Event Log ({len(rows)}) + Summary. opt-in {funnel['confirmed']}/{funnel['confirmed']+funnel['declined']} = {optrate}%. OK {now:%H:%M IST}", flush=True)
 
 
