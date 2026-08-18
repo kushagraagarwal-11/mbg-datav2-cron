@@ -1,0 +1,23 @@
+name: Payout750 event log (every 4h)
+
+on:
+  schedule:
+    # every 4 hours (export lags a few hrs, so this keeps the log fresh)
+    - cron: "0 */4 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - name: Refresh Payout750 full event log → "750 opt ins" sheet
+        env:
+          CT_PASS: ${{ secrets.CT_PASS }}
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+        run: python payout750_eventlog_push.py
