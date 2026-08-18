@@ -102,6 +102,7 @@ def main():
     STAGES = ["viewed", "opened", "reached_choice", "confirmed", "declined", "closed"]
     fun = {k: set() for k in STAGES}          # DISTINCT cspids per funnel stage
     fl = {}                                    # flow -> {viewed,confirmed,declined} cspid sets
+    dwell_by_csp = {}                          # cspid -> [ts, sec_hero..sec_choice, seconds]  (latest Closed)
     csps = set()
     def flset(flow):
         return fl.setdefault(flow or "TEST", {"viewed": set(), "confirmed": set(), "declined": set()})
@@ -120,7 +121,11 @@ def main():
             elif short == "Progress" and mil == "reached_choice": fun["reached_choice"].add(c)
             elif short == "Confirmed": fun["confirmed"].add(c); flset(fa)["confirmed"].add(c)
             elif short == "Declined": fun["declined"].add(c); flset(fa)["declined"].add(c)
-            elif short == "Closed": fun["closed"].add(c)
+            elif short == "Closed":
+                fun["closed"].add(c)
+                prev = dwell_by_csp.get(c)
+                if prev is None or ts > prev[0]:      # keep the latest Closed session per CSP
+                    dwell_by_csp[c] = [ts] + [ep.get("sec_" + b) for b in BLOCKS] + [ep.get("seconds")]
             rows.append([fmt_ts(ts), c, short, fa, flow, mil, choice] +
                         [ep.get("sec_" + b, "") for b in BLOCKS] +
                         [ep.get("max_block", ""), ep.get("seconds", ""), ep.get("lang", ""),
@@ -159,6 +164,16 @@ def main():
     def pv(x): return f"{round(100*x/viewed)}%" if viewed else "-"          # % of all who viewed
     def step(x, prev): return f"{round(100*x/prev)}%" if prev else "-"      # step-to-step conversion
     def drop(prev, x): return f"-{prev-x}" if prev >= x else "+" + str(x-prev)
+    opened_csps = fun["opened"]
+    def avgsec(idx):                             # avg seconds on a section, among CSPs who opened page 2
+        vals = []
+        for c, v in dwell_by_csp.items():
+            if c not in opened_csps: continue
+            x = v[1 + idx]
+            if x in (None, ""): continue
+            try: vals.append(float(x))
+            except Exception: pass
+        return round(sum(vals) / len(vals), 1) if vals else 0
 
     summ = []; hdr_rows = []
     def add(*row): summ.append(list(row))
@@ -176,6 +191,14 @@ def main():
     add("")
     add("Closed  (any exit, incl. abandon)", closed, pv(closed))
     add("Unique CSPs (any event)", len(csps))
+    add("")
+    hdr_rows.append(len(summ)); add("AVG TIME on page 2  (sec per section · CSPs who opened)", "avg sec")
+    add("Hero — ₹750 intro",          avgsec(0))
+    add("Timeline — the journey",     avgsec(1))
+    add("Scenarios — stops early",    avgsec(2))
+    add("Key points",                 avgsec(3))
+    add("Choice — the decision",      avgsec(4))
+    add("Whole session (incl. cover + confirm screen)", avgsec(5))
     add("")
     hdr_rows.append(len(summ)); add("BY FLOW (assigned) — unique CSPs", "viewed", "opted-in", "declined", "opt-in %")
     for f in ["1", "2", "3"] + [x for x in sorted(fl) if x not in ("1", "2", "3")]:
