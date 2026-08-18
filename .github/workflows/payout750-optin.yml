@@ -1,0 +1,25 @@
+name: Payout750 opt-in log (daily)
+
+on:
+  schedule:
+    # 08:30 IST = 03:00 UTC — primary daily refresh
+    - cron: "0 3 * * *"
+    # 14:30 IST = 09:00 UTC — backup (export lags a few hours; second pull catches the tail)
+    - cron: "0 9 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - name: Refresh Payout750 opt-in/declined log (our owned record)
+        env:
+          CT_PASS: ${{ secrets.CT_PASS }}
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+        run: python payout750_optin_push.py
