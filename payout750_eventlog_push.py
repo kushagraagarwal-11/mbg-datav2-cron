@@ -104,7 +104,7 @@ def main():
     fl = {}                                    # flow -> {viewed,confirmed,declined} cspid sets
     csps = set()
     def flset(flow):
-        return fl.setdefault(flow or "(unmapped)", {"viewed": set(), "confirmed": set(), "declined": set()})
+        return fl.setdefault(flow or "TEST", {"viewed": set(), "confirmed": set(), "declined": set()})
     for ev in EVENTS:
         short = ev.replace("Payout750_", "")
         for r in export(ev, frm, to):
@@ -114,7 +114,7 @@ def main():
             key = (short, c, ts, mil, choice)
             if key in seen: continue
             seen.add(key); csps.add(c)
-            fa = design.get(c, "") or flow            # assigned flow: Design first, else event's own
+            fa = design.get(c, "") or flow or ("TEST" if design else "")   # Design flow; non-cohort/test → TEST
             if short == "Viewed": fun["viewed"].add(c); flset(fa)["viewed"].add(c)
             elif short == "Progress" and mil == "content_opened": fun["opened"].add(c)
             elif short == "Progress" and mil == "reached_choice": fun["reached_choice"].add(c)
