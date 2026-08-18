@@ -99,9 +99,12 @@ def main():
     frm = int(os.environ.get("P750_FROM", "20260817"))
     to = int((datetime.datetime.now(IST) + datetime.timedelta(days=1)).strftime("%Y%m%d"))
     rows = []; seen = set()
-    funnel = Counter(); by_flow = {}; csps = set()
-    def bf(flow):
-        return by_flow.setdefault(flow or "(unmapped)", Counter())
+    STAGES = ["viewed", "opened", "reached_choice", "confirmed", "declined", "closed"]
+    fun = {k: set() for k in STAGES}          # DISTINCT cspids per funnel stage
+    fl = {}                                    # flow -> {viewed,confirmed,declined} cspid sets
+    csps = set()
+    def flset(flow):
+        return fl.setdefault(flow or "(unmapped)", {"viewed": set(), "confirmed": set(), "declined": set()})
     for ev in EVENTS:
         short = ev.replace("Payout750_", "")
         for r in export(ev, frm, to):
@@ -112,12 +115,12 @@ def main():
             if key in seen: continue
             seen.add(key); csps.add(c)
             fa = design.get(c, "") or flow            # assigned flow: Design first, else event's own
-            if short == "Viewed": funnel["viewed"] += 1; bf(fa)["viewed"] += 1
-            elif short == "Progress" and mil == "content_opened": funnel["opened"] += 1
-            elif short == "Progress" and mil == "reached_choice": funnel["reached_choice"] += 1
-            elif short == "Confirmed": funnel["confirmed"] += 1; bf(fa)["confirmed"] += 1
-            elif short == "Declined": funnel["declined"] += 1; bf(fa)["declined"] += 1
-            elif short == "Closed": funnel["closed"] += 1
+            if short == "Viewed": fun["viewed"].add(c); flset(fa)["viewed"].add(c)
+            elif short == "Progress" and mil == "content_opened": fun["opened"].add(c)
+            elif short == "Progress" and mil == "reached_choice": fun["reached_choice"].add(c)
+            elif short == "Confirmed": fun["confirmed"].add(c); flset(fa)["confirmed"].add(c)
+            elif short == "Declined": fun["declined"].add(c); flset(fa)["declined"].add(c)
+            elif short == "Closed": fun["closed"].add(c)
             rows.append([fmt_ts(ts), c, short, fa, flow, mil, choice] +
                         [ep.get("sec_" + b, "") for b in BLOCKS] +
                         [ep.get("max_block", ""), ep.get("seconds", ""), ep.get("lang", ""),
@@ -125,14 +128,17 @@ def main():
                          ep.get("last_selected", ""), ep.get("exit", ""),
                          ep.get("api_status", ""), ep.get("api_error", "")])
     rows.sort(key=lambda x: x[0])
-    print(f"events: {len(rows)}  csps: {len(csps)}  funnel: {dict(funnel)}", flush=True)
+    funnel = {k: len(v) for k, v in fun.items()}     # unique-CSP counts per stage
+    deciders_all = fun["confirmed"] | fun["declined"]
+    optrate = round(100 * len(fun["confirmed"]) / len(deciders_all)) if deciders_all else 0
+    print(f"events: {len(rows)}  unique CSPs: {len(csps)}  funnel(unique): {funnel}", flush=True)
 
     hdr = (["timestamp (IST)", "cspid", "event", "flow_assigned", "flow_tag", "milestone", "choice"] +
            ["sec_" + b for b in BLOCKS] +
            ["max_block", "seconds", "lang", "lang_toggles", "selection_changes", "last_selected", "exit", "api_status", "api_error"])
     now = datetime.datetime.now(IST)
-    banner = [f"PAYOUT750 EVENT LOG — every tracked event from CleverTap. {len(rows)} events · {len(csps)} CSPs. "
-              f"Funnel: {funnel['viewed']} viewed → {funnel['opened']} opened → {funnel['reached_choice']} reached choice → "
+    banner = [f"PAYOUT750 EVENT LOG — every tracked event from CleverTap. {len(rows)} events · {len(csps)} unique CSPs. "
+              f"Funnel (UNIQUE CSPs): {funnel['viewed']} viewed → {funnel['opened']} opened → {funnel['reached_choice']} reached choice → "
               f"{funnel['confirmed']} opted-in / {funnel['declined']} declined. flow_assigned = from Design cohort map (cspid→Flow). "
               f"Last refresh {now:%Y-%m-%d %H:%M IST} (CleverTap export lags ~1 hr)."]
 
@@ -146,10 +152,9 @@ def main():
     ws.update(values=[banner] + [[""] * len(hdr)] + [hdr] + rows, range_name="A1", value_input_option="RAW")
     ws.format(f"A3:{chr(64+len(hdr))}3", {"textFormat": {"bold": True}})
 
-    # Summary
-    optrate = round(100 * funnel["confirmed"] / (funnel["confirmed"] + funnel["declined"])) if (funnel["confirmed"] + funnel["declined"]) else 0
+    # Summary — every count is UNIQUE CSPs
     summ = [["PAYOUT750 SUMMARY", f"updated {now:%Y-%m-%d %H:%M IST}"], [""],
-            ["Funnel", "count"],
+            ["Funnel (unique CSPs)", "CSPs"],
             ["Banner viewed", funnel["viewed"]],
             ["Opened content", funnel["opened"]],
             ["Reached choice", funnel["reached_choice"]],
@@ -157,13 +162,14 @@ def main():
             ["Declined", funnel["declined"]],
             ["Closed (terminal)", funnel["closed"]],
             ["Opt-in rate (of deciders)", f"{optrate}%"],
-            ["Unique CSPs", len(csps)], [""],
-            ["By flow (assigned from Design)", "viewed", "opted-in", "declined", "opt-in %"]]
-    for f in ["1", "2", "3"] + [x for x in sorted(by_flow) if x not in ("1", "2", "3")]:
-        if f not in by_flow: continue
-        b = by_flow[f]; dec = b.get("confirmed", 0) + b.get("declined", 0)
-        summ.append([("Flow " + f) if f in ("1", "2", "3") else f, b.get("viewed", 0), b.get("confirmed", 0), b.get("declined", 0),
-                     f"{round(100*b.get('confirmed',0)/dec)}%" if dec else "-"])
+            ["Unique CSPs (any event)", len(csps)], [""],
+            ["By flow (assigned) — unique CSPs", "viewed", "opted-in", "declined", "opt-in %"]]
+    for f in ["1", "2", "3"] + [x for x in sorted(fl) if x not in ("1", "2", "3")]:
+        if f not in fl: continue
+        d = fl[f]; opted = d["confirmed"]; dec_only = d["declined"] - opted     # a CSP who ended up opting in isn't also 'declined'
+        deciders = len(opted) + len(dec_only)
+        summ.append([("Flow " + f) if f in ("1", "2", "3") else f, len(d["viewed"]), len(opted), len(dec_only),
+                     f"{round(100*len(opted)/deciders)}%" if deciders else "-"])
     try: ws2 = ss.worksheet("Summary")
     except gspread.WorksheetNotFound: ws2 = ss.add_worksheet("Summary", rows=40, cols=6)
     ws2.clear()
@@ -171,7 +177,7 @@ def main():
     ws2.format("A1:B1", {"textFormat": {"bold": True, "fontSize": 12}})
     ws2.format("A3:E3", {"textFormat": {"bold": True}})
     ws2.format("A13:E13", {"textFormat": {"bold": True}})
-    print(f"wrote Event Log ({len(rows)}) + Summary. opt-in {funnel['confirmed']}/{funnel['confirmed']+funnel['declined']} = {optrate}%. OK {now:%H:%M IST}", flush=True)
+    print(f"wrote Event Log ({len(rows)}) + Summary. opt-in {len(fun['confirmed'])}/{len(deciders_all)} unique = {optrate}%. OK {now:%H:%M IST}", flush=True)
 
 
 if __name__ == "__main__":
