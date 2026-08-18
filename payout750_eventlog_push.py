@@ -90,6 +90,13 @@ def fmt_ts(ts):
     except: return ts
 
 
+def pctile(a, p):
+    a = sorted(x for x in a if x is not None)
+    if not a: return "-"
+    k = (len(a) - 1) * p / 100.0; f = int(k); c = min(f + 1, len(a) - 1)
+    return round(a[f] + (a[c] - a[f]) * (k - f), 1)
+
+
 def main():
     gc = gspread.authorize(creds())
     ss = gc.open_by_key(SHEET_ID)
@@ -103,6 +110,7 @@ def main():
     fun = {k: set() for k in STAGES}          # DISTINCT cspids per funnel stage
     fl = {}                                    # flow -> {viewed,confirmed,declined} cspid sets
     dwell_by_csp = {}                          # cspid -> [ts, sec_hero..sec_choice, seconds]  (latest Closed)
+    declined_dwell = {}                        # cspid -> same, from latest Declined event (real cohort only)
     csps = set()
     def flset(flow):
         return fl.setdefault(flow or "TEST", {"viewed": set(), "confirmed": set(), "declined": set()})
@@ -120,7 +128,12 @@ def main():
             elif short == "Progress" and mil == "content_opened": fun["opened"].add(c)
             elif short == "Progress" and mil == "reached_choice": fun["reached_choice"].add(c)
             elif short == "Confirmed": fun["confirmed"].add(c); flset(fa)["confirmed"].add(c)
-            elif short == "Declined": fun["declined"].add(c); flset(fa)["declined"].add(c)
+            elif short == "Declined":
+                fun["declined"].add(c); flset(fa)["declined"].add(c)
+                if fa != "TEST":                      # real cohort only, for the percentile table
+                    prev = declined_dwell.get(c)
+                    if prev is None or ts > prev[0]:
+                        declined_dwell[c] = [ts] + [ep.get("sec_" + b) for b in BLOCKS] + [ep.get("seconds")]
             elif short == "Closed":
                 fun["closed"].add(c)
                 prev = dwell_by_csp.get(c)
@@ -207,6 +220,33 @@ def main():
         deciders = len(opted) + len(dec_only)
         add(("Flow " + f) if f in ("1", "2", "3") else f, len(d["viewed"]), len(opted), len(dec_only),
             f"{round(100*len(opted)/deciders)}%" if deciders else "-")
+
+    # Declined CSPs — time percentiles per page-2 section (active seconds, no downtime)
+    def dcol(idx):
+        vals = []
+        for v in declined_dwell.values():
+            x = v[1 + idx]
+            if x in (None, ""): continue
+            try: vals.append(float(x))
+            except Exception: pass
+        return vals
+    def dtotal():
+        vals = []
+        for v in declined_dwell.values():
+            s = 0.0; ok = False
+            for i in range(5):
+                x = v[1 + i]
+                if x in (None, ""): continue
+                try: s += float(x); ok = True
+                except Exception: pass
+            if ok: vals.append(s)
+        return vals
+    add("")
+    hdr_rows.append(len(summ)); add(f"DECLINED CSPs — active sec per section  (n={len(declined_dwell)})", "p25", "p50", "p95")
+    for i, lab in enumerate(["Hero (₹750 intro)", "Timeline (journey)", "Scenarios (stops early)", "Key points", "Choice (decision)"]):
+        a = dcol(i); add(lab, pctile(a, 25), pctile(a, 50), pctile(a, 95))
+    pt = dtotal(); add("Page 2 total (active)", pctile(pt, 25), pctile(pt, 50), pctile(pt, 95))
+    wsv = dcol(5); add("Whole session (wall-clock)", pctile(wsv, 25), pctile(wsv, 50), pctile(wsv, 95))
 
     try: ws2 = ss.worksheet("Summary")
     except gspread.WorksheetNotFound: ws2 = ss.add_worksheet("Summary", rows=45, cols=6)
