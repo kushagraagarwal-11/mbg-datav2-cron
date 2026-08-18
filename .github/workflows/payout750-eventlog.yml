@@ -1,9 +1,11 @@
-name: Payout750 event log (every 4h)
+name: Payout750 event log (every 5 min)
 
 on:
   schedule:
-    # every 4 hours (export lags a few hrs, so this keeps the log fresh)
-    - cron: "0 */4 * * *"
+    # every 5 minutes — runs on GitHub's cloud (laptop can be off), public repo = free minutes.
+    # GitHub's scheduler is best-effort: in practice it fires roughly every 5-15 min and can skip
+    # under load. The job is idempotent (clear + rewrite), so extra/late runs are harmless.
+    - cron: "*/5 * * * *"
   workflow_dispatch: {}
 
 jobs:
