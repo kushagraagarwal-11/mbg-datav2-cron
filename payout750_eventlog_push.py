@@ -152,31 +152,46 @@ def main():
     ws.update(values=[banner] + [[""] * len(hdr)] + [hdr] + rows, range_name="A1", value_input_option="RAW")
     ws.format(f"A3:{chr(64+len(hdr))}3", {"textFormat": {"bold": True}})
 
-    # Summary — every count is UNIQUE CSPs
-    summ = [["PAYOUT750 SUMMARY", f"updated {now:%Y-%m-%d %H:%M IST}"], [""],
-            ["Funnel (unique CSPs)", "CSPs"],
-            ["Banner viewed", funnel["viewed"]],
-            ["Opened content", funnel["opened"]],
-            ["Reached choice", funnel["reached_choice"]],
-            ["Opted in (Confirmed)", funnel["confirmed"]],
-            ["Declined", funnel["declined"]],
-            ["Closed (terminal)", funnel["closed"]],
-            ["Opt-in rate (of deciders)", f"{optrate}%"],
-            ["Unique CSPs (any event)", len(csps)], [""],
-            ["By flow (assigned) — unique CSPs", "viewed", "opted-in", "declined", "opt-in %"]]
+    # Summary — funnel drop-off with conversion %s (every count = UNIQUE CSPs)
+    viewed = funnel["viewed"]; opened = funnel["opened"]; reached = funnel["reached_choice"]
+    n_opted = funnel["confirmed"]; n_declined = funnel["declined"]; closed = funnel["closed"]
+    decided = len(fun["confirmed"] | fun["declined"])
+    def pv(x): return f"{round(100*x/viewed)}%" if viewed else "-"          # % of all who viewed
+    def step(x, prev): return f"{round(100*x/prev)}%" if prev else "-"      # step-to-step conversion
+    def drop(prev, x): return f"-{prev-x}" if prev >= x else "+" + str(x-prev)
+
+    summ = []; hdr_rows = []
+    def add(*row): summ.append(list(row))
+    add("PAYOUT750 SUMMARY", f"updated {now:%Y-%m-%d %H:%M IST}"); add("")
+    hdr_rows.append(len(summ)); add("FUNNEL (unique CSPs)", "CSPs", "% of viewed", "step conv.", "drop-off")
+    add("1 · Viewed  (page 1 shown)",           viewed,  "100%",       "—",                    "—")
+    add("2 · Opened content  (→ page 2)",  opened,  pv(opened),   step(opened, viewed),   drop(viewed, opened))
+    add("3 · Reached choice  (scrolled down)",  reached, pv(reached),  step(reached, opened),  drop(opened, reached))
+    add("4 · Made a decision",                  decided, pv(decided),  step(decided, reached), drop(reached, decided))
+    add("")
+    declined_only = decided - n_opted        # declined and did NOT end up opting in (so opted+declined = deciders)
+    hdr_rows.append(len(summ)); add("DECISION", "CSPs", "% of deciders", "% of viewed")
+    add("Opted in  ✅", n_opted,       f"{round(100*n_opted/decided)}%" if decided else "-",       pv(n_opted))
+    add("Declined",     declined_only, f"{round(100*declined_only/decided)}%" if decided else "-", pv(declined_only))
+    add("")
+    add("Closed  (any exit, incl. abandon)", closed, pv(closed))
+    add("Unique CSPs (any event)", len(csps))
+    add("")
+    hdr_rows.append(len(summ)); add("BY FLOW (assigned) — unique CSPs", "viewed", "opted-in", "declined", "opt-in %")
     for f in ["1", "2", "3"] + [x for x in sorted(fl) if x not in ("1", "2", "3")]:
         if f not in fl: continue
-        d = fl[f]; opted = d["confirmed"]; dec_only = d["declined"] - opted     # a CSP who ended up opting in isn't also 'declined'
+        d = fl[f]; opted = d["confirmed"]; dec_only = d["declined"] - opted     # opting in isn't also 'declined'
         deciders = len(opted) + len(dec_only)
-        summ.append([("Flow " + f) if f in ("1", "2", "3") else f, len(d["viewed"]), len(opted), len(dec_only),
-                     f"{round(100*len(opted)/deciders)}%" if deciders else "-"])
+        add(("Flow " + f) if f in ("1", "2", "3") else f, len(d["viewed"]), len(opted), len(dec_only),
+            f"{round(100*len(opted)/deciders)}%" if deciders else "-")
+
     try: ws2 = ss.worksheet("Summary")
-    except gspread.WorksheetNotFound: ws2 = ss.add_worksheet("Summary", rows=40, cols=6)
+    except gspread.WorksheetNotFound: ws2 = ss.add_worksheet("Summary", rows=45, cols=6)
     ws2.clear()
     ws2.update(values=summ, range_name="A1", value_input_option="RAW")
-    ws2.format("A1:B1", {"textFormat": {"bold": True, "fontSize": 12}})
-    ws2.format("A3:E3", {"textFormat": {"bold": True}})
-    ws2.format("A13:E13", {"textFormat": {"bold": True}})
+    ws2.format("A1:B1", {"textFormat": {"bold": True, "fontSize": 13}})
+    for hr in hdr_rows:
+        ws2.format(f"A{hr+1}:E{hr+1}", {"textFormat": {"bold": True}, "backgroundColor": {"red": .93, "green": .90, "blue": .97}})
     print(f"wrote Event Log ({len(rows)}) + Summary. opt-in {len(fun['confirmed'])}/{len(deciders_all)} unique = {optrate}%. OK {now:%H:%M IST}", flush=True)
 
 
