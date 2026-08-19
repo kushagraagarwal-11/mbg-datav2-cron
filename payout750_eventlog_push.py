@@ -105,10 +105,49 @@ def pctile(a, p):
     return round(a[f] + (a[c] - a[f]) * (k - f), 1)
 
 
+# --- Real-time backend opt-ins (DOMINANCE_CONSENT) — authoritative, no export lag. ---
+MB_KEY = os.environ.get("METABASE_KEY", "mb_1dsbxsJfyROPsVyNpifJ8hTTlIDG85+qNKRo91KDnb4=")
+def mb_query(sql):
+    body = json.dumps({"database": 113, "type": "native", "native": {"query": sql}}).encode()
+    try:
+        d = json.loads(urllib.request.urlopen(urllib.request.Request(
+            "https://metabase.wiom.in/api/dataset", data=body,
+            headers={"x-api-key": MB_KEY, "Content-Type": "application/json"}), timeout=120).read().decode())
+        if isinstance(d, dict) and d.get("error"):
+            print("  MB err", str(d["error"])[:120], flush=True); return []
+        return d["data"]["rows"]
+    except Exception as e:
+        print("  MB query failed:", str(e)[:120], flush=True); return []
+
+def backend_optins(run_from_ts):
+    """OPTED_IN rows from DOMINANCE_CONSENT since the run start (IST), deduped per CSP → [(cspid, ist_ts)]."""
+    if not run_from_ts or len(run_from_ts) < 14: return []
+    r = run_from_ts
+    ist = f"{r[0:4]}-{r[4:6]}-{r[6:8]} {r[8:10]}:{r[10:12]}:{r[12:14]}"
+    # Compare TZ-aware: CONSENT_TIMESTAMP is TIMESTAMP_TZ, so the cutoff must carry the +05:30 offset
+    # (a bare literal is read in the session tz = UTC, which would drop the IST opt-ins).
+    sql = ("SELECT CSP_ID, TO_CHAR(CONVERT_TIMEZONE('Asia/Kolkata', MAX(CONSENT_TIMESTAMP)), 'YYYY-MM-DD HH24:MI:SS') "
+           "FROM PROD_DB.CSP_RV_SERVICE_CSP_RV_SERVICE.DOMINANCE_CONSENT "
+           "WHERE CONSENT_CHOICE='OPTED_IN' AND COALESCE(_FIVETRAN_DELETED,FALSE)=FALSE "
+           f"AND CONSENT_TIMESTAMP >= '{ist} +05:30'::timestamp_tz "
+           "GROUP BY CSP_ID ORDER BY 2")
+    return mb_query(sql)
+
+def load_names(gc):
+    """cspid -> business name from the Design tab (for labelling backend opt-ins)."""
+    try:
+        vals = gc.open_by_key(DESIGN_SHEET_ID).worksheet("Design").get_all_values()
+        h = vals[0]; ci = h.index("CSP ID"); ni = h.index("Partner Name")
+    except Exception:
+        return {}
+    return {r[ci].strip(): r[ni].strip() for r in vals[1:] if len(r) > max(ci, ni) and r[ci].strip()}
+
+
 def main():
     gc = gspread.authorize(creds())
     ss = gc.open_by_key(SHEET_ID)
     design = load_design(gc)
+    names = load_names(gc)
     print(f"design map: {len(design)} CSPs", flush=True)
 
     frm = int(os.environ.get("P750_FROM", "20260817"))
@@ -210,9 +249,13 @@ def main():
             except Exception: pass
         return round(sum(vals) / len(vals), 1) if vals else 0
 
+    be = backend_optins(RUN_FROM_TS)          # real-time opt-ins from DOMINANCE_CONSENT (no export lag)
     summ = []; hdr_rows = []
     def add(*row): summ.append(list(row))
     add(f"PAYOUT750 SUMMARY{(' — ' + RUN_LABEL) if RUN_LABEL else ''}", f"updated {now:%Y-%m-%d %H:%M IST}"); add("")
+    if RUN_FROM_TS:
+        add(f"⚡ LIVE opt-ins (backend, real-time) = {len(be)}",
+            "← authoritative. The export-based funnel below lags ~1 hr, so its 'opted-in' can read lower."); add("")
     hdr_rows.append(len(summ)); add("FUNNEL (unique CSPs)", "CSPs", "% of viewed", "step conv.", "drop-off")
     add("1 · Viewed  (page 1 shown)",           viewed,  "100%",       "—",                    "—")
     add("2 · Opened content  (→ page 2)",  opened,  pv(opened),   step(opened, viewed),   drop(viewed, opened))
@@ -276,6 +319,13 @@ def main():
     add("")
     hdr_rows.append(len(summ)); add(f"OPTED-IN CSPs — sec on each page-2 content block  (n={len(opted_dwell)})", "p25", "p50", "p90")
     for r in pct_rows(opted_dwell, [25, 50, 90]): add(*r)
+
+    if RUN_FROM_TS:
+        add("")
+        hdr_rows.append(len(summ)); add(f"BACKEND OPT-INS — real-time from DOMINANCE_CONSENT  (n={len(be)})", "opted at (IST)")
+        for cid, t in be:
+            nm = names.get(cid, "")
+            add((nm + "  (" + cid + ")") if nm else cid, t)
 
     try: ws2 = ss.worksheet(SUMMARY_TAB)
     except gspread.WorksheetNotFound: ws2 = ss.add_worksheet(SUMMARY_TAB, rows=45, cols=6)
