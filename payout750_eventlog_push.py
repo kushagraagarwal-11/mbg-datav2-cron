@@ -111,6 +111,7 @@ def main():
     fl = {}                                    # flow -> {viewed,confirmed,declined} cspid sets
     dwell_by_csp = {}                          # cspid -> [ts, sec_hero..sec_choice, seconds]  (latest Closed)
     declined_dwell = {}                        # cspid -> same, from latest Declined event (real cohort only)
+    opted_dwell = {}                           # cspid -> same, from latest Confirmed event (real cohort only)
     csps = set()
     def flset(flow):
         return fl.setdefault(flow or "TEST", {"viewed": set(), "confirmed": set(), "declined": set()})
@@ -127,7 +128,12 @@ def main():
             if short == "Viewed": fun["viewed"].add(c); flset(fa)["viewed"].add(c)
             elif short == "Progress" and mil == "content_opened": fun["opened"].add(c)
             elif short == "Progress" and mil == "reached_choice": fun["reached_choice"].add(c)
-            elif short == "Confirmed": fun["confirmed"].add(c); flset(fa)["confirmed"].add(c)
+            elif short == "Confirmed":
+                fun["confirmed"].add(c); flset(fa)["confirmed"].add(c)
+                if fa != "TEST":
+                    prev = opted_dwell.get(c)
+                    if prev is None or ts > prev[0]:
+                        opted_dwell[c] = [ts] + [ep.get("sec_" + b) for b in BLOCKS] + [ep.get("seconds")]
             elif short == "Declined":
                 fun["declined"].add(c); flset(fa)["declined"].add(c)
                 if fa != "TEST":                      # real cohort only, for the percentile table
@@ -221,32 +227,39 @@ def main():
         add(("Flow " + f) if f in ("1", "2", "3") else f, len(d["viewed"]), len(opted), len(dec_only),
             f"{round(100*len(opted)/deciders)}%" if deciders else "-")
 
-    # Declined CSPs — time percentiles per page-2 section (active seconds, no downtime)
-    def dcol(idx):
-        vals = []
-        for v in declined_dwell.values():
-            x = v[1 + idx]
-            if x in (None, ""): continue
-            try: vals.append(float(x))
-            except Exception: pass
-        return vals
-    def dtotal():
-        vals = []
-        for v in declined_dwell.values():
-            s = 0.0; ok = False
-            for i in range(5):
-                x = v[1 + i]
+    # Time percentiles: seconds spent on each page-2 content block (active, no downtime)
+    def pct_rows(dwell, ps):
+        def col(idx):
+            out = []
+            for v in dwell.values():
+                x = v[1 + idx]
                 if x in (None, ""): continue
-                try: s += float(x); ok = True
+                try: out.append(float(x))
                 except Exception: pass
-            if ok: vals.append(s)
-        return vals
+            return out
+        def total():
+            out = []
+            for v in dwell.values():
+                s = 0.0; ok = False
+                for i in range(5):
+                    x = v[1 + i]
+                    if x in (None, ""): continue
+                    try: s += float(x); ok = True
+                    except Exception: pass
+                if ok: out.append(s)
+            return out
+        rows = []
+        for i, lab in enumerate(["Hero (₹750 intro)", "Timeline (journey)", "Scenarios (stops early)", "Key points", "Choice (decision)"]):
+            a = col(i); rows.append([lab] + [pctile(a, p) for p in ps])
+        t = total(); rows.append(["Page 2 total (active)"] + [pctile(t, p) for p in ps])
+        w = col(5); rows.append(["Whole session (wall-clock)"] + [pctile(w, p) for p in ps])
+        return rows
     add("")
-    hdr_rows.append(len(summ)); add(f"DECLINED CSPs — active sec per section  (n={len(declined_dwell)})", "p25", "p50", "p95")
-    for i, lab in enumerate(["Hero (₹750 intro)", "Timeline (journey)", "Scenarios (stops early)", "Key points", "Choice (decision)"]):
-        a = dcol(i); add(lab, pctile(a, 25), pctile(a, 50), pctile(a, 95))
-    pt = dtotal(); add("Page 2 total (active)", pctile(pt, 25), pctile(pt, 50), pctile(pt, 95))
-    wsv = dcol(5); add("Whole session (wall-clock)", pctile(wsv, 25), pctile(wsv, 50), pctile(wsv, 95))
+    hdr_rows.append(len(summ)); add(f"DECLINED CSPs — sec on each page-2 content block  (n={len(declined_dwell)})", "p25", "p50", "p95")
+    for r in pct_rows(declined_dwell, [25, 50, 95]): add(*r)
+    add("")
+    hdr_rows.append(len(summ)); add(f"OPTED-IN CSPs — sec on each page-2 content block  (n={len(opted_dwell)})", "p25", "p50", "p90")
+    for r in pct_rows(opted_dwell, [25, 50, 90]): add(*r)
 
     try: ws2 = ss.worksheet("Summary")
     except gspread.WorksheetNotFound: ws2 = ss.add_worksheet("Summary", rows=45, cols=6)
