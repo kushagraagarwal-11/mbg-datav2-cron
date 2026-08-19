@@ -18,8 +18,25 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -r requirements.txt
-      - name: Refresh Payout750 full event log → "750 opt ins" sheet
+
+      # 1) Cumulative log across ALL runs → "Event Log" (gid 0) + "Summary (all-time)".
+      #    (Yesterday's frozen "Summary (18 Aug)" tab is never touched.)
+      - name: Cumulative event log → Event Log + Summary (all-time)
         env:
           CT_PASS: ${{ secrets.CT_PASS }}
           GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+          P750_SUMMARY_TAB: "Summary (all-time)"
+        run: python payout750_eventlog_push.py
+
+      # 2) New-run tracker — ONLY the 19-Aug campaigns (Flow1 1787145338 / Flow2 1787145880 /
+      #    Flow3 1787146027, live 19-Aug 18:45+). Scoped by ts >= 18:30 so yesterday is excluded.
+      - name: New-run tracker (19-Aug) → Event Log (19 Aug) + Summary (19 Aug)
+        env:
+          CT_PASS: ${{ secrets.CT_PASS }}
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+          P750_FROM: "20260819"
+          P750_RUN_FROM_TS: "20260819183000"
+          P750_EVENTLOG_TAB: "Event Log (19 Aug)"
+          P750_SUMMARY_TAB: "Summary (19 Aug)"
+          P750_RUN_LABEL: "19 Aug new run"
         run: python payout750_eventlog_push.py

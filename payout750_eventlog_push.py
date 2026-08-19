@@ -29,6 +29,14 @@ IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
 BLOCKS = ["hero", "timeline", "scenarios", "keypoints", "choice"]
 EVENTS = ["Payout750_Viewed", "Payout750_Progress", "Payout750_Confirmed", "Payout750_Declined", "Payout750_Closed"]
 
+# --- optional run-scoping (isolate one campaign run) ---
+# RUN_FROM_TS: drop events with ts < this YYYYMMDDHHMMSS (the new campaigns went live 19-Aug 18:45).
+# EVENTLOG_TAB / SUMMARY_TAB: write to dated tabs so yesterday's frozen tabs are untouched.
+RUN_FROM_TS  = os.environ.get("P750_RUN_FROM_TS", "")
+EVENTLOG_TAB = os.environ.get("P750_EVENTLOG_TAB", "Event Log")
+SUMMARY_TAB  = os.environ.get("P750_SUMMARY_TAB", "Summary")
+RUN_LABEL    = os.environ.get("P750_RUN_LABEL", "")
+
 
 def export(evname, frm, to):
     body = json.dumps({"event_name": evname, "from": frm, "to": to}).encode()
@@ -121,6 +129,7 @@ def main():
         for r in export(ev, frm, to):
             ep = r.get("event_props", {}) or {}
             c = cid_of(r); ts = str(r.get("ts", "")); flow = norm_flow(str(ep.get("flow", "")))
+            if RUN_FROM_TS and ts and ts < RUN_FROM_TS: continue   # new-run scoping — skip prior-run events
             mil = ep.get("milestone", ""); choice = ep.get("choice", "")
             key = (short, c, ts, mil, choice)
             if key in seen: continue
@@ -164,17 +173,21 @@ def main():
            ["sec_" + b for b in BLOCKS] +
            ["max_block", "seconds", "lang", "lang_toggles", "selection_changes", "last_selected", "exit", "api_status", "api_error"])
     now = datetime.datetime.now(IST)
-    banner = [f"PAYOUT750 EVENT LOG — every tracked event from CleverTap. {len(rows)} events · {n_csps} real CSPs. "
+    banner = [f"PAYOUT750 EVENT LOG{(' — ' + RUN_LABEL) if RUN_LABEL else ''} — every tracked event from CleverTap. {len(rows)} events · {n_csps} real CSPs. "
               f"Funnel (UNIQUE CSPs): {funnel['viewed']} viewed → {funnel['opened']} opened → {funnel['reached_choice']} reached choice → "
               f"{funnel['confirmed']} opted-in / {funnel['declined']} declined. flow_assigned = from Design cohort map (cspid→Flow). "
+              f"{('Scope: events from ' + RUN_FROM_TS + ' onward. ') if RUN_FROM_TS else ''}"
               f"Last refresh {now:%Y-%m-%d %H:%M IST} (CleverTap export lags ~1 hr)."]
 
     # Event Log = first tab (gid 0) so the shared link opens straight to the data
     try:
-        ws = ss.worksheet("Event Log")
+        ws = ss.worksheet(EVENTLOG_TAB)
     except gspread.WorksheetNotFound:
-        try: ws = ss.sheet1; ws.update_title("Event Log")
-        except Exception: ws = ss.add_worksheet("Event Log", rows=max(200, len(rows) + 10), cols=len(hdr))
+        if EVENTLOG_TAB == "Event Log":
+            try: ws = ss.sheet1; ws.update_title("Event Log")
+            except Exception: ws = ss.add_worksheet(EVENTLOG_TAB, rows=max(200, len(rows) + 10), cols=len(hdr))
+        else:
+            ws = ss.add_worksheet(EVENTLOG_TAB, rows=max(200, len(rows) + 10), cols=len(hdr))
     ws.clear()
     ws.update(values=[banner] + [[""] * len(hdr)] + [hdr] + rows, range_name="A1", value_input_option="RAW")
     ws.format(f"A3:{chr(64+len(hdr))}3", {"textFormat": {"bold": True}})
@@ -199,7 +212,7 @@ def main():
 
     summ = []; hdr_rows = []
     def add(*row): summ.append(list(row))
-    add("PAYOUT750 SUMMARY", f"updated {now:%Y-%m-%d %H:%M IST}"); add("")
+    add(f"PAYOUT750 SUMMARY{(' — ' + RUN_LABEL) if RUN_LABEL else ''}", f"updated {now:%Y-%m-%d %H:%M IST}"); add("")
     hdr_rows.append(len(summ)); add("FUNNEL (unique CSPs)", "CSPs", "% of viewed", "step conv.", "drop-off")
     add("1 · Viewed  (page 1 shown)",           viewed,  "100%",       "—",                    "—")
     add("2 · Opened content  (→ page 2)",  opened,  pv(opened),   step(opened, viewed),   drop(viewed, opened))
@@ -264,8 +277,8 @@ def main():
     hdr_rows.append(len(summ)); add(f"OPTED-IN CSPs — sec on each page-2 content block  (n={len(opted_dwell)})", "p25", "p50", "p90")
     for r in pct_rows(opted_dwell, [25, 50, 90]): add(*r)
 
-    try: ws2 = ss.worksheet("Summary")
-    except gspread.WorksheetNotFound: ws2 = ss.add_worksheet("Summary", rows=45, cols=6)
+    try: ws2 = ss.worksheet(SUMMARY_TAB)
+    except gspread.WorksheetNotFound: ws2 = ss.add_worksheet(SUMMARY_TAB, rows=45, cols=6)
     ws2.clear()
     ws2.update(values=summ, range_name="A1", value_input_option="RAW")
     ws2.format("A1:B1", {"textFormat": {"bold": True, "fontSize": 13}})
