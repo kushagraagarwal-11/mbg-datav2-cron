@@ -271,7 +271,7 @@ def main():
     ws2.format("A1:B1", {"textFormat": {"bold": True, "fontSize": 13}})
     for hr in hdr_rows:
         ws2.format(f"A{hr+1}:E{hr+1}", {"textFormat": {"bold": True}, "backgroundColor": {"red": .93, "green": .90, "blue": .97}})
-    print(f"wrote Event Log ({len(rows)}) + Summary. opt-in {len(fun['confirmed'])}/{len(deciders_all)} unique = {optrate}%. OK {now:%H:%M IST}", flush=True)
+    print(f"wrote Event Log ({len(rows)}) + Summary. opt-in {funnel['confirmed']}/{len(deciders_all)} real = {optrate}%. OK {now:%H:%M IST}", flush=True)
 
 
 if __name__ == "__main__":
