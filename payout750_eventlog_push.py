@@ -192,6 +192,11 @@ def main():
                         declined_dwell[c] = [ts] + [ep.get("sec_" + b) for b in BLOCKS] + [ep.get("seconds")]
             elif short == "Closed":
                 fun["closed"].add(c)
+                # Closed carries the FINAL choice and usually lands in the export before the separate
+                # Confirmed/Declined event does — count it here too so the Summary keeps pace with the
+                # Event Log rows (choice: new = opted in, later = declined).
+                if choice == "new": fun["confirmed"].add(c); flset(fa)["confirmed"].add(c)
+                elif choice == "later": fun["declined"].add(c); flset(fa)["declined"].add(c)
                 prev = dwell_by_csp.get(c)
                 if prev is None or ts > prev[0]:      # keep the latest Closed session per CSP
                     dwell_by_csp[c] = [ts] + [ep.get("sec_" + b) for b in BLOCKS] + [ep.get("seconds")]
