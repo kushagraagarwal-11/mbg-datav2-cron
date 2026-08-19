@@ -113,6 +113,7 @@ def main():
     declined_dwell = {}                        # cspid -> same, from latest Declined event (real cohort only)
     opted_dwell = {}                           # cspid -> same, from latest Confirmed event (real cohort only)
     csps = set()
+    test_csps = set()                          # non-cohort/test cspids — excluded from the headline funnel/decision
     def flset(flow):
         return fl.setdefault(flow or "TEST", {"viewed": set(), "confirmed": set(), "declined": set()})
     for ev in EVENTS:
@@ -125,6 +126,7 @@ def main():
             if key in seen: continue
             seen.add(key); csps.add(c)
             fa = design.get(c, "") or flow or ("TEST" if design else "")   # Design flow; non-cohort/test → TEST
+            if fa == "TEST": test_csps.add(c)
             if short == "Viewed": fun["viewed"].add(c); flset(fa)["viewed"].add(c)
             elif short == "Progress" and mil == "content_opened": fun["opened"].add(c)
             elif short == "Progress" and mil == "reached_choice": fun["reached_choice"].add(c)
@@ -152,16 +154,17 @@ def main():
                          ep.get("last_selected", ""), ep.get("exit", ""),
                          ep.get("api_status", ""), ep.get("api_error", "")])
     rows.sort(key=lambda x: x[0])
-    funnel = {k: len(v) for k, v in fun.items()}     # unique-CSP counts per stage
-    deciders_all = fun["confirmed"] | fun["declined"]
-    optrate = round(100 * len(fun["confirmed"]) / len(deciders_all)) if deciders_all else 0
-    print(f"events: {len(rows)}  unique CSPs: {len(csps)}  funnel(unique): {funnel}", flush=True)
+    funnel = {k: len(v - test_csps) for k, v in fun.items()}     # unique REAL-cohort CSPs per stage (test excluded)
+    deciders_all = (fun["confirmed"] | fun["declined"]) - test_csps
+    optrate = round(100 * len(fun["confirmed"] - test_csps) / len(deciders_all)) if deciders_all else 0
+    n_csps = len(csps - test_csps)
+    print(f"events: {len(rows)}  real CSPs: {n_csps} (+{len(test_csps)} test)  funnel(unique): {funnel}", flush=True)
 
     hdr = (["timestamp (IST)", "cspid", "event", "flow_assigned", "flow_tag", "milestone", "choice"] +
            ["sec_" + b for b in BLOCKS] +
            ["max_block", "seconds", "lang", "lang_toggles", "selection_changes", "last_selected", "exit", "api_status", "api_error"])
     now = datetime.datetime.now(IST)
-    banner = [f"PAYOUT750 EVENT LOG — every tracked event from CleverTap. {len(rows)} events · {len(csps)} unique CSPs. "
+    banner = [f"PAYOUT750 EVENT LOG — every tracked event from CleverTap. {len(rows)} events · {n_csps} real CSPs. "
               f"Funnel (UNIQUE CSPs): {funnel['viewed']} viewed → {funnel['opened']} opened → {funnel['reached_choice']} reached choice → "
               f"{funnel['confirmed']} opted-in / {funnel['declined']} declined. flow_assigned = from Design cohort map (cspid→Flow). "
               f"Last refresh {now:%Y-%m-%d %H:%M IST} (CleverTap export lags ~1 hr)."]
@@ -179,11 +182,11 @@ def main():
     # Summary — funnel drop-off with conversion %s (every count = UNIQUE CSPs)
     viewed = funnel["viewed"]; opened = funnel["opened"]; reached = funnel["reached_choice"]
     n_opted = funnel["confirmed"]; n_declined = funnel["declined"]; closed = funnel["closed"]
-    decided = len(fun["confirmed"] | fun["declined"])
+    decided = len((fun["confirmed"] | fun["declined"]) - test_csps)
     def pv(x): return f"{round(100*x/viewed)}%" if viewed else "-"          # % of all who viewed
     def step(x, prev): return f"{round(100*x/prev)}%" if prev else "-"      # step-to-step conversion
     def drop(prev, x): return f"-{prev-x}" if prev >= x else "+" + str(x-prev)
-    opened_csps = fun["opened"]
+    opened_csps = fun["opened"] - test_csps
     def avgsec(idx):                             # avg seconds on a section, among CSPs who opened page 2
         vals = []
         for c, v in dwell_by_csp.items():
@@ -209,7 +212,7 @@ def main():
     add("Declined",     declined_only, f"{round(100*declined_only/decided)}%" if decided else "-", pv(declined_only))
     add("")
     add("Closed  (any exit, incl. abandon)", closed, pv(closed))
-    add("Unique CSPs (any event)", len(csps))
+    add("Unique CSPs (real cohort)", n_csps)
     add("")
     hdr_rows.append(len(summ)); add("AVG TIME on page 2  (sec per section · CSPs who opened)", "avg sec")
     add("Hero — ₹750 intro",          avgsec(0))
