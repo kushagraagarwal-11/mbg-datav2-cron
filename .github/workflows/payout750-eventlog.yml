@@ -41,3 +41,14 @@ jobs:
           P750_SUMMARY_TAB: "Summary (19 Aug)"
           P750_RUN_LABEL: "19 Aug new run"
         run: python payout750_eventlog_push.py
+
+      # 3) Per-CSP who & when — one row per CSP: Opted In / Declined / Abandoned, the deciding
+      #    role (owner-precedence, single, current role), and the time.
+      - name: Who & when (19-Aug) → "Opt-ins & Declines — who & when (19 Aug)"
+        env:
+          CT_PASS: ${{ secrets.CT_PASS }}
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+          P750_FROM: "20260819"
+          P750_RUN_FROM_TS: "20260819183000"
+          P750_WHO_TAB: "Opt-ins & Declines — who & when (19 Aug)"
+        run: python payout750_who_when.py
