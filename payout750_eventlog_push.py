@@ -3,13 +3,14 @@
 
 Pulls every Payout750 event (Viewed / Progress / Confirmed / Declined / Closed) from the
 CleverTap Events Export and writes:
-  - "Event Log"  : one row per event, all properties + flow_assigned (from the Design cohort map).
-  - "Summary"    : live funnel counts + opt-in rate, overall and per assigned flow.
+  - Event Log : one row per event (run-scoped), all properties + flow_assigned (Design cohort map).
+  - Summary   : funnel / decision / avg-time / by-flow / percentiles, for the 19-Aug new run AND
+                the 18+19-Aug combined total (same tables, stacked).
 
-flow_assigned comes from the "Different flows for 750" Design tab (cspid -> Flow), so events are
-attributable to Flow 1/2/3 even when the live HTML doesn't stamp the `flow` property.
+flow_assigned comes from the "Different flows for 750" Design tab (cspid -> Flow).
 
-Env: CT_PASS, GOOGLE_SA_JSON (or local SA file). Optional: P750_LOG_SHEET_ID, P750_DESIGN_SHEET_ID, P750_FROM.
+Env: CT_PASS, GOOGLE_SA_JSON (or local SA). Optional: P750_LOG_SHEET_ID, P750_DESIGN_SHEET_ID,
+     P750_FROM, P750_RUN_FROM_TS, P750_COMBINED_FROM_TS, P750_EVENTLOG_TAB, P750_SUMMARY_TAB, P750_RUN_LABEL.
 """
 import os, sys, json, time, tempfile, urllib.request, datetime
 sys.stdout.reconfigure(encoding="utf-8")
@@ -28,14 +29,14 @@ DESIGN_SHEET_ID = os.environ.get("P750_DESIGN_SHEET_ID", "1SfWil0SaN1lKPTqtTF86e
 IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
 BLOCKS = ["hero", "timeline", "scenarios", "keypoints", "choice"]
 EVENTS = ["Payout750_Viewed", "Payout750_Progress", "Payout750_Confirmed", "Payout750_Declined", "Payout750_Closed"]
+STAGES = ["viewed", "opened", "reached_choice", "confirmed", "declined", "closed"]
 
-# --- optional run-scoping (isolate one campaign run) ---
-# RUN_FROM_TS: drop events with ts < this YYYYMMDDHHMMSS (the new campaigns went live 19-Aug 18:45).
-# EVENTLOG_TAB / SUMMARY_TAB: write to dated tabs so yesterday's frozen tabs are untouched.
 RUN_FROM_TS  = os.environ.get("P750_RUN_FROM_TS", "")
+COMBINED_FROM_TS = os.environ.get("P750_COMBINED_FROM_TS", "20260818000000")  # 18+19 combined lower bound
 EVENTLOG_TAB = os.environ.get("P750_EVENTLOG_TAB", "Event Log")
 SUMMARY_TAB  = os.environ.get("P750_SUMMARY_TAB", "Summary")
 RUN_LABEL    = os.environ.get("P750_RUN_LABEL", "")
+MB_KEY = os.environ.get("METABASE_KEY", "mb_1dsbxsJfyROPsVyNpifJ8hTTlIDG85+qNKRo91KDnb4=")
 
 
 def export(evname, frm, to):
@@ -73,10 +74,8 @@ def norm_flow(s):
 
 
 def load_design(gc):
-    """cspid -> assigned flow ('1'/'2'/'3') from the Design tab."""
     try:
-        ws = gc.open_by_key(DESIGN_SHEET_ID).worksheet("Design")
-        vals = ws.get_all_values()
+        vals = gc.open_by_key(DESIGN_SHEET_ID).worksheet("Design").get_all_values()
     except Exception as e:
         print("  design load failed:", str(e)[:80], flush=True); return {}
     m = {}
@@ -105,8 +104,6 @@ def pctile(a, p):
     return round(a[f] + (a[c] - a[f]) * (k - f), 1)
 
 
-# --- Real-time backend opt-ins (DOMINANCE_CONSENT) — authoritative, no export lag. ---
-MB_KEY = os.environ.get("METABASE_KEY", "mb_1dsbxsJfyROPsVyNpifJ8hTTlIDG85+qNKRo91KDnb4=")
 def mb_query(sql):
     body = json.dumps({"database": 113, "type": "native", "native": {"query": sql}}).encode()
     try:
@@ -119,13 +116,12 @@ def mb_query(sql):
     except Exception as e:
         print("  MB query failed:", str(e)[:120], flush=True); return []
 
-def backend_optins(run_from_ts):
-    """OPTED_IN rows from DOMINANCE_CONSENT since the run start (IST), deduped per CSP → [(cspid, ist_ts)]."""
-    if not run_from_ts or len(run_from_ts) < 14: return []
-    r = run_from_ts
+
+def backend_optins(from_ts):
+    """OPTED_IN rows from DOMINANCE_CONSENT since from_ts (IST), deduped per CSP → [(cspid, ist_ts)]."""
+    if not from_ts or len(from_ts) < 14: return []
+    r = from_ts
     ist = f"{r[0:4]}-{r[4:6]}-{r[6:8]} {r[8:10]}:{r[10:12]}:{r[12:14]}"
-    # Compare TZ-aware: CONSENT_TIMESTAMP is TIMESTAMP_TZ, so the cutoff must carry the +05:30 offset
-    # (a bare literal is read in the session tz = UTC, which would drop the IST opt-ins).
     sql = ("SELECT CSP_ID, TO_CHAR(CONVERT_TIMEZONE('Asia/Kolkata', MAX(CONSENT_TIMESTAMP)), 'YYYY-MM-DD HH24:MI:SS') "
            "FROM PROD_DB.CSP_RV_SERVICE_CSP_RV_SERVICE.DOMINANCE_CONSENT "
            "WHERE CONSENT_CHOICE='OPTED_IN' AND COALESCE(_FIVETRAN_DELETED,FALSE)=FALSE "
@@ -133,14 +129,49 @@ def backend_optins(run_from_ts):
            "GROUP BY CSP_ID ORDER BY 2")
     return mb_query(sql)
 
+
 def load_names(gc):
-    """cspid -> business name from the Design tab (for labelling backend opt-ins)."""
     try:
         vals = gc.open_by_key(DESIGN_SHEET_ID).worksheet("Design").get_all_values()
         h = vals[0]; ci = h.index("CSP ID"); ni = h.index("Partner Name")
     except Exception:
         return {}
     return {r[ci].strip(): r[ni].strip() for r in vals[1:] if len(r) > max(ci, ni) and r[ci].strip()}
+
+
+def aggregate(records):
+    """Dedupe records and build funnel/by-flow/dwell aggregates for one scope."""
+    seen = set()
+    fun = {k: set() for k in STAGES}; fl = {}
+    dwell_by_csp = {}; declined_dwell = {}; opted_dwell = {}
+    csps = set(); test_csps = set()
+    def flset(flow): return fl.setdefault(flow or "TEST", {"viewed": set(), "confirmed": set(), "declined": set()})
+    for rec in records:
+        short = rec["short"]; c = rec["c"]; ts = rec["ts"]; mil = rec["mil"]; choice = rec["choice"]; ep = rec["ep"]; fa = rec["fa"]
+        key = (short, c, ts, mil, choice)
+        if key in seen: continue
+        seen.add(key); csps.add(c)
+        if fa == "TEST": test_csps.add(c)
+        if short == "Viewed": fun["viewed"].add(c); flset(fa)["viewed"].add(c)
+        elif short == "Progress" and mil == "content_opened": fun["opened"].add(c)
+        elif short == "Progress" and mil == "reached_choice": fun["reached_choice"].add(c)
+        elif short == "Confirmed":
+            fun["confirmed"].add(c); flset(fa)["confirmed"].add(c)
+            if fa != "TEST":
+                prev = opted_dwell.get(c)
+                if prev is None or ts > prev[0]: opted_dwell[c] = [ts] + [ep.get("sec_" + b) for b in BLOCKS] + [ep.get("seconds")]
+        elif short == "Declined":
+            fun["declined"].add(c); flset(fa)["declined"].add(c)
+            if fa != "TEST":
+                prev = declined_dwell.get(c)
+                if prev is None or ts > prev[0]: declined_dwell[c] = [ts] + [ep.get("sec_" + b) for b in BLOCKS] + [ep.get("seconds")]
+        elif short == "Closed":
+            fun["closed"].add(c)
+            if choice == "new": fun["confirmed"].add(c); flset(fa)["confirmed"].add(c)
+            elif choice == "later": fun["declined"].add(c); flset(fa)["declined"].add(c)
+            prev = dwell_by_csp.get(c)
+            if prev is None or ts > prev[0]: dwell_by_csp[c] = [ts] + [ep.get("sec_" + b) for b in BLOCKS] + [ep.get("seconds")]
+    return dict(fun=fun, fl=fl, dwell_by_csp=dwell_by_csp, declined_dwell=declined_dwell, opted_dwell=opted_dwell, csps=csps, test_csps=test_csps)
 
 
 def main():
@@ -150,80 +181,53 @@ def main():
     names = load_names(gc)
     print(f"design map: {len(design)} CSPs", flush=True)
 
-    frm = int(os.environ.get("P750_FROM", "20260817"))
+    frm = int(os.environ.get("P750_FROM", "20260818"))   # pull both days so the combined block has 18-Aug
     to = int((datetime.datetime.now(IST) + datetime.timedelta(days=1)).strftime("%Y%m%d"))
-    rows = []; seen = set()
-    STAGES = ["viewed", "opened", "reached_choice", "confirmed", "declined", "closed"]
-    fun = {k: set() for k in STAGES}          # DISTINCT cspids per funnel stage
-    fl = {}                                    # flow -> {viewed,confirmed,declined} cspid sets
-    dwell_by_csp = {}                          # cspid -> [ts, sec_hero..sec_choice, seconds]  (latest Closed)
-    declined_dwell = {}                        # cspid -> same, from latest Declined event (real cohort only)
-    opted_dwell = {}                           # cspid -> same, from latest Confirmed event (real cohort only)
-    csps = set()
-    test_csps = set()                          # non-cohort/test cspids — excluded from the headline funnel/decision
-    def flset(flow):
-        return fl.setdefault(flow or "TEST", {"viewed": set(), "confirmed": set(), "declined": set()})
+
+    # Parse ALL exported events once into records; aggregate twice with different lower bounds.
+    allrec = []
     for ev in EVENTS:
         short = ev.replace("Payout750_", "")
         for r in export(ev, frm, to):
             ep = r.get("event_props", {}) or {}
             c = cid_of(r); ts = str(r.get("ts", "")); flow = norm_flow(str(ep.get("flow", "")))
-            if RUN_FROM_TS and ts and ts < RUN_FROM_TS: continue   # new-run scoping — skip prior-run events
             mil = ep.get("milestone", ""); choice = ep.get("choice", "")
-            key = (short, c, ts, mil, choice)
-            if key in seen: continue
-            seen.add(key); csps.add(c)
-            fa = design.get(c, "") or flow or ("TEST" if design else "")   # Design flow; non-cohort/test → TEST
-            if fa == "TEST": test_csps.add(c)
-            if short == "Viewed": fun["viewed"].add(c); flset(fa)["viewed"].add(c)
-            elif short == "Progress" and mil == "content_opened": fun["opened"].add(c)
-            elif short == "Progress" and mil == "reached_choice": fun["reached_choice"].add(c)
-            elif short == "Confirmed":
-                fun["confirmed"].add(c); flset(fa)["confirmed"].add(c)
-                if fa != "TEST":
-                    prev = opted_dwell.get(c)
-                    if prev is None or ts > prev[0]:
-                        opted_dwell[c] = [ts] + [ep.get("sec_" + b) for b in BLOCKS] + [ep.get("seconds")]
-            elif short == "Declined":
-                fun["declined"].add(c); flset(fa)["declined"].add(c)
-                if fa != "TEST":                      # real cohort only, for the percentile table
-                    prev = declined_dwell.get(c)
-                    if prev is None or ts > prev[0]:
-                        declined_dwell[c] = [ts] + [ep.get("sec_" + b) for b in BLOCKS] + [ep.get("seconds")]
-            elif short == "Closed":
-                fun["closed"].add(c)
-                # Closed carries the FINAL choice and usually lands in the export before the separate
-                # Confirmed/Declined event does — count it here too so the Summary keeps pace with the
-                # Event Log rows (choice: new = opted in, later = declined).
-                if choice == "new": fun["confirmed"].add(c); flset(fa)["confirmed"].add(c)
-                elif choice == "later": fun["declined"].add(c); flset(fa)["declined"].add(c)
-                prev = dwell_by_csp.get(c)
-                if prev is None or ts > prev[0]:      # keep the latest Closed session per CSP
-                    dwell_by_csp[c] = [ts] + [ep.get("sec_" + b) for b in BLOCKS] + [ep.get("seconds")]
-            rows.append([fmt_ts(ts), c, short, fa, flow, mil, choice] +
-                        [ep.get("sec_" + b, "") for b in BLOCKS] +
-                        [ep.get("max_block", ""), ep.get("seconds", ""), ep.get("lang", ""),
-                         ep.get("lang_toggles", ""), ep.get("selection_changes", ""),
-                         ep.get("last_selected", ""), ep.get("exit", ""),
-                         ep.get("api_status", ""), ep.get("api_error", "")])
-    rows.sort(key=lambda x: x[0])
-    funnel = {k: len(v - test_csps) for k, v in fun.items()}     # unique REAL-cohort CSPs per stage (test excluded)
-    deciders_all = (fun["confirmed"] | fun["declined"]) - test_csps
-    optrate = round(100 * len(fun["confirmed"] - test_csps) / len(deciders_all)) if deciders_all else 0
-    n_csps = len(csps - test_csps)
-    print(f"events: {len(rows)}  real CSPs: {n_csps} (+{len(test_csps)} test)  funnel(unique): {funnel}", flush=True)
+            fa = design.get(c, "") or flow or ("TEST" if design else "")
+            allrec.append({"short": short, "c": c, "ts": ts, "flow": flow, "mil": mil, "choice": choice, "ep": ep, "fa": fa})
 
+    rec19 = [r for r in allrec if not (RUN_FROM_TS and r["ts"] and r["ts"] < RUN_FROM_TS)]
+    recAll = [r for r in allrec if r["ts"] >= COMBINED_FROM_TS]
+    A19 = aggregate(rec19)
+    Aall = aggregate(recAll)
+
+    # ---- Event Log (19-run only) ----
     hdr = (["timestamp (IST)", "cspid", "event", "flow_assigned", "flow_tag", "milestone", "choice"] +
            ["sec_" + b for b in BLOCKS] +
            ["max_block", "seconds", "lang", "lang_toggles", "selection_changes", "last_selected", "exit", "api_status", "api_error"])
+    seen_rows = set(); rows = []
+    for r in rec19:
+        ep = r["ep"]; key = (r["short"], r["c"], r["ts"], r["mil"], r["choice"])
+        if key in seen_rows: continue
+        seen_rows.add(key)
+        rows.append([fmt_ts(r["ts"]), r["c"], r["short"], r["fa"], r["flow"], r["mil"], r["choice"]] +
+                    [ep.get("sec_" + b, "") for b in BLOCKS] +
+                    [ep.get("max_block", ""), ep.get("seconds", ""), ep.get("lang", ""), ep.get("lang_toggles", ""),
+                     ep.get("selection_changes", ""), ep.get("last_selected", ""), ep.get("exit", ""),
+                     ep.get("api_status", ""), ep.get("api_error", "")])
+    rows.sort(key=lambda x: x[0])
+
+    f19 = {k: len(v - A19["test_csps"]) for k, v in A19["fun"].items()}
+    deciders_all = (A19["fun"]["confirmed"] | A19["fun"]["declined"]) - A19["test_csps"]
+    optrate = round(100 * len(A19["fun"]["confirmed"] - A19["test_csps"]) / len(deciders_all)) if deciders_all else 0
+    n_csps19 = len(A19["csps"] - A19["test_csps"])
     now = datetime.datetime.now(IST)
-    banner = [f"PAYOUT750 EVENT LOG{(' — ' + RUN_LABEL) if RUN_LABEL else ''} — every tracked event from CleverTap. {len(rows)} events · {n_csps} real CSPs. "
-              f"Funnel (UNIQUE CSPs): {funnel['viewed']} viewed → {funnel['opened']} opened → {funnel['reached_choice']} reached choice → "
-              f"{funnel['confirmed']} opted-in / {funnel['declined']} declined. flow_assigned = from Design cohort map (cspid→Flow). "
+    print(f"events(19-run): {len(rows)}  real CSPs: {n_csps19}  funnel: {f19}", flush=True)
+
+    banner = [f"PAYOUT750 EVENT LOG{(' — ' + RUN_LABEL) if RUN_LABEL else ''} — every tracked event from CleverTap. {len(rows)} events · {n_csps19} real CSPs. "
+              f"Funnel (UNIQUE CSPs): {f19['viewed']} viewed → {f19['opened']} opened → {f19['reached_choice']} reached choice → "
+              f"{f19['confirmed']} opted-in / {f19['declined']} declined. flow_assigned = from Design cohort map (cspid→Flow). "
               f"{('Scope: events from ' + RUN_FROM_TS + ' onward. ') if RUN_FROM_TS else ''}"
               f"Last refresh {now:%Y-%m-%d %H:%M IST} (CleverTap export lags ~1 hr)."]
-
-    # Event Log = first tab (gid 0) so the shared link opens straight to the data
     try:
         ws = ss.worksheet(EVENTLOG_TAB)
     except gspread.WorksheetNotFound:
@@ -236,110 +240,116 @@ def main():
     ws.update(values=[banner] + [[""] * len(hdr)] + [hdr] + rows, range_name="A1", value_input_option="RAW")
     ws.format(f"A3:{chr(64+len(hdr))}3", {"textFormat": {"bold": True}})
 
-    # Summary — funnel drop-off with conversion %s (every count = UNIQUE CSPs)
-    viewed = funnel["viewed"]; opened = funnel["opened"]; reached = funnel["reached_choice"]
-    n_opted = funnel["confirmed"]; n_declined = funnel["declined"]; closed = funnel["closed"]
-    decided = len((fun["confirmed"] | fun["declined"]) - test_csps)
-    def pv(x): return f"{round(100*x/viewed)}%" if viewed else "-"          # % of all who viewed
-    def step(x, prev): return f"{round(100*x/prev)}%" if prev else "-"      # step-to-step conversion
-    def drop(prev, x): return f"-{prev-x}" if prev >= x else "+" + str(x-prev)
-    opened_csps = fun["opened"] - test_csps
-    def avgsec(idx):                             # avg seconds on a section, among CSPs who opened page 2
-        vals = []
-        for c, v in dwell_by_csp.items():
-            if c not in opened_csps: continue
-            x = v[1 + idx]
-            if x in (None, ""): continue
-            try: vals.append(float(x))
-            except Exception: pass
-        return round(sum(vals) / len(vals), 1) if vals else 0
-
-    be = backend_optins(RUN_FROM_TS)          # real-time opt-ins from DOMINANCE_CONSENT (no export lag)
+    # ---- Summary: two stacked blocks (19-run, then 18+19 combined) ----
     summ = []; hdr_rows = []
     def add(*row): summ.append(list(row))
-    add(f"PAYOUT750 SUMMARY{(' — ' + RUN_LABEL) if RUN_LABEL else ''}", f"updated {now:%Y-%m-%d %H:%M IST}"); add("")
-    if RUN_FROM_TS:
-        add(f"⚡ LIVE opt-ins (backend, real-time) = {len(be)}",
-            "← authoritative. The export-based funnel below lags ~1 hr, so its 'opted-in' can read lower."); add("")
-    hdr_rows.append(len(summ)); add("FUNNEL (unique CSPs)", "CSPs", "% of viewed", "step conv.", "drop-off")
-    add("1 · Viewed  (page 1 shown)",           viewed,  "100%",       "—",                    "—")
-    add("2 · Opened content  (→ page 2)",  opened,  pv(opened),   step(opened, viewed),   drop(viewed, opened))
-    add("3 · Reached choice  (scrolled down)",  reached, pv(reached),  step(reached, opened),  drop(opened, reached))
-    add("4 · Made a decision",                  decided, pv(decided),  step(decided, reached), drop(reached, decided))
-    add("")
-    declined_only = decided - n_opted        # declined and did NOT end up opting in (so opted+declined = deciders)
-    hdr_rows.append(len(summ)); add("DECISION", "CSPs", "% of deciders", "% of viewed")
-    add("Opted in  ✅", n_opted,       f"{round(100*n_opted/decided)}%" if decided else "-",       pv(n_opted))
-    add("Declined",     declined_only, f"{round(100*declined_only/decided)}%" if decided else "-", pv(declined_only))
-    add("")
-    add("Closed  (any exit, incl. abandon)", closed, pv(closed))
-    add("Unique CSPs (real cohort)", n_csps)
-    add("")
-    hdr_rows.append(len(summ)); add("AVG TIME on page 2  (sec per section · CSPs who opened)", "avg sec")
-    add("Hero — ₹750 intro",          avgsec(0))
-    add("Timeline — the journey",     avgsec(1))
-    add("Scenarios — stops early",    avgsec(2))
-    add("Key points",                 avgsec(3))
-    add("Choice — the decision",      avgsec(4))
-    add("Whole session (incl. cover + confirm screen)", avgsec(5))
-    add("")
-    hdr_rows.append(len(summ)); add("BY FLOW (assigned) — unique CSPs", "viewed", "opted-in", "declined", "opt-in %")
-    for f in ["1", "2", "3"] + [x for x in sorted(fl) if x not in ("1", "2", "3")]:
-        if f not in fl: continue
-        d = fl[f]; opted = d["confirmed"]; dec_only = d["declined"] - opted     # opting in isn't also 'declined'
-        deciders = len(opted) + len(dec_only)
-        add(("Flow " + f) if f in ("1", "2", "3") else f, len(d["viewed"]), len(opted), len(dec_only),
-            f"{round(100*len(opted)/deciders)}%" if deciders else "-")
 
-    # Time percentiles: seconds spent on each page-2 content block (active, no downtime)
-    def pct_rows(dwell, ps):
-        def col(idx):
-            out = []
-            for v in dwell.values():
+    def emit_block(A, be, label):
+        fun = A["fun"]; fl = A["fl"]; test = A["test_csps"]
+        dwell_by_csp = A["dwell_by_csp"]; declined_dwell = A["declined_dwell"]; opted_dwell = A["opted_dwell"]
+        funnel = {k: len(v - test) for k, v in fun.items()}
+        viewed = funnel["viewed"]; opened = funnel["opened"]; reached = funnel["reached_choice"]
+        n_opted = funnel["confirmed"]; closed = funnel["closed"]
+        decided = len((fun["confirmed"] | fun["declined"]) - test)
+        n_csps = len(A["csps"] - test)
+        def pv(x): return f"{round(100*x/viewed)}%" if viewed else "-"
+        def step(x, prev): return f"{round(100*x/prev)}%" if prev else "-"
+        def drop(prev, x): return f"-{prev-x}" if prev >= x else "+" + str(x-prev)
+        opened_csps = fun["opened"] - test
+        def avgsec(idx):
+            vals = []
+            for c, v in dwell_by_csp.items():
+                if c not in opened_csps: continue
                 x = v[1 + idx]
                 if x in (None, ""): continue
-                try: out.append(float(x))
+                try: vals.append(float(x))
                 except Exception: pass
-            return out
-        def total():
-            out = []
-            for v in dwell.values():
-                s = 0.0; ok = False
-                for i in range(5):
-                    x = v[1 + i]
+            return round(sum(vals) / len(vals), 1) if vals else 0
+        def pct_rows(dwell, ps):
+            def col(idx):
+                out = []
+                for v in dwell.values():
+                    x = v[1 + idx]
                     if x in (None, ""): continue
-                    try: s += float(x); ok = True
+                    try: out.append(float(x))
                     except Exception: pass
-                if ok: out.append(s)
-            return out
-        rows = []
-        for i, lab in enumerate(["Hero (₹750 intro)", "Timeline (journey)", "Scenarios (stops early)", "Key points", "Choice (decision)"]):
-            a = col(i); rows.append([lab] + [pctile(a, p) for p in ps])
-        t = total(); rows.append(["Page 2 total (active)"] + [pctile(t, p) for p in ps])
-        w = col(5); rows.append(["Whole session (wall-clock)"] + [pctile(w, p) for p in ps])
-        return rows
-    add("")
-    hdr_rows.append(len(summ)); add(f"DECLINED CSPs — sec on each page-2 content block  (n={len(declined_dwell)})", "p25", "p50", "p95")
-    for r in pct_rows(declined_dwell, [25, 50, 95]): add(*r)
-    add("")
-    hdr_rows.append(len(summ)); add(f"OPTED-IN CSPs — sec on each page-2 content block  (n={len(opted_dwell)})", "p25", "p50", "p90")
-    for r in pct_rows(opted_dwell, [25, 50, 90]): add(*r)
+                return out
+            def total():
+                out = []
+                for v in dwell.values():
+                    s = 0.0; ok = False
+                    for i in range(5):
+                        x = v[1 + i]
+                        if x in (None, ""): continue
+                        try: s += float(x); ok = True
+                        except Exception: pass
+                    if ok: out.append(s)
+                return out
+            rr = []
+            for i, lab in enumerate(["Hero (₹750 intro)", "Timeline (journey)", "Scenarios (stops early)", "Key points", "Choice (decision)"]):
+                rr.append([lab] + [pctile(col(i), p) for p in ps])
+            rr.append(["Page 2 total (active)"] + [pctile(total(), p) for p in ps])
+            rr.append(["Whole session (wall-clock)"] + [pctile(col(5), p) for p in ps])
+            return rr
 
-    if RUN_FROM_TS:
         add("")
-        hdr_rows.append(len(summ)); add(f"BACKEND OPT-INS — real-time from DOMINANCE_CONSENT  (n={len(be)})", "opted at (IST)")
-        for cid, t in be:
+        hdr_rows.append(len(summ)); add(f"━━━ {label} ━━━", (f"⚡ backend opt-ins (real-time) = {len(be)}" if be is not None else ""))
+        hdr_rows.append(len(summ)); add("FUNNEL (unique CSPs)", "CSPs", "% of viewed", "step conv.", "drop-off")
+        add("1 · Viewed  (page 1 shown)",          viewed,  "100%",      "—",                   "—")
+        add("2 · Opened content  (→ page 2)",       opened,  pv(opened),  step(opened, viewed),  drop(viewed, opened))
+        add("3 · Reached choice  (scrolled down)",  reached, pv(reached), step(reached, opened), drop(opened, reached))
+        add("4 · Made a decision",                  decided, pv(decided), step(decided, reached),drop(reached, decided))
+        add("")
+        declined_only = decided - n_opted
+        hdr_rows.append(len(summ)); add("DECISION", "CSPs", "% of deciders", "% of viewed")
+        add("Opted in  ✅", n_opted,       f"{round(100*n_opted/decided)}%" if decided else "-",       pv(n_opted))
+        add("Declined",     declined_only, f"{round(100*declined_only/decided)}%" if decided else "-", pv(declined_only))
+        add("")
+        add("Closed  (any exit, incl. abandon)", closed, pv(closed))
+        add("Unique CSPs (real cohort)", n_csps)
+        add("")
+        hdr_rows.append(len(summ)); add("AVG TIME on page 2  (sec per section · CSPs who opened)", "avg sec")
+        add("Hero — ₹750 intro", avgsec(0)); add("Timeline — the journey", avgsec(1)); add("Scenarios — stops early", avgsec(2))
+        add("Key points", avgsec(3)); add("Choice — the decision", avgsec(4)); add("Whole session (incl. cover + confirm screen)", avgsec(5))
+        add("")
+        hdr_rows.append(len(summ)); add("BY FLOW (assigned) — unique CSPs", "viewed", "opted-in", "declined", "opt-in %")
+        for f in ["1", "2", "3"] + [x for x in sorted(fl) if x not in ("1", "2", "3", "TEST")]:
+            if f not in fl: continue
+            d = fl[f]; opted = d["confirmed"]; dec_only = d["declined"] - opted
+            deciders = len(opted) + len(dec_only)
+            add(("Flow " + f) if f in ("1", "2", "3") else f, len(d["viewed"]), len(opted), len(dec_only),
+                f"{round(100*len(opted)/deciders)}%" if deciders else "-")
+        add("")
+        hdr_rows.append(len(summ)); add(f"DECLINED CSPs — sec on each page-2 content block  (n={len(declined_dwell)})", "p25", "p50", "p95")
+        for r in pct_rows(declined_dwell, [25, 50, 95]): add(*r)
+        add("")
+        hdr_rows.append(len(summ)); add(f"OPTED-IN CSPs — sec on each page-2 content block  (n={len(opted_dwell)})", "p25", "p50", "p90")
+        for r in pct_rows(opted_dwell, [25, 50, 90]): add(*r)
+
+    be19 = backend_optins(RUN_FROM_TS) if RUN_FROM_TS else None
+    beAll = backend_optins(COMBINED_FROM_TS)
+    add(f"PAYOUT750 SUMMARY{(' — ' + RUN_LABEL) if RUN_LABEL else ''}", f"updated {now:%Y-%m-%d %H:%M IST}")
+    if be19 is not None:
+        add(f"⚡ LIVE opt-ins (backend, real-time) = {len(be19)}", "← authoritative for the 19-Aug run. The export-based funnels below lag ~1 hr.")
+    emit_block(A19, be19, "19-AUG NEW RUN")
+    add("")
+    emit_block(Aall, beAll, "18 + 19 AUG — COMBINED (all campaigns)")
+
+    if be19 is not None:
+        add("")
+        hdr_rows.append(len(summ)); add(f"BACKEND OPT-INS (19-Aug) — real-time from DOMINANCE_CONSENT  (n={len(be19)})", "opted at (IST)")
+        for cid, t in be19:
             nm = names.get(cid, "")
             add((nm + "  (" + cid + ")") if nm else cid, t)
 
     try: ws2 = ss.worksheet(SUMMARY_TAB)
-    except gspread.WorksheetNotFound: ws2 = ss.add_worksheet(SUMMARY_TAB, rows=45, cols=6)
+    except gspread.WorksheetNotFound: ws2 = ss.add_worksheet(SUMMARY_TAB, rows=90, cols=6)
     ws2.clear()
     ws2.update(values=summ, range_name="A1", value_input_option="RAW")
     ws2.format("A1:B1", {"textFormat": {"bold": True, "fontSize": 13}})
     for hr in hdr_rows:
         ws2.format(f"A{hr+1}:E{hr+1}", {"textFormat": {"bold": True}, "backgroundColor": {"red": .93, "green": .90, "blue": .97}})
-    print(f"wrote Event Log ({len(rows)}) + Summary. opt-in {funnel['confirmed']}/{len(deciders_all)} real = {optrate}%. OK {now:%H:%M IST}", flush=True)
+    print(f"wrote Event Log ({len(rows)}) + Summary [19-run + combined]. 19-run opt-in {f19['confirmed']}/{len(deciders_all)} = {optrate}%. OK {now:%H:%M IST}", flush=True)
 
 
 if __name__ == "__main__":

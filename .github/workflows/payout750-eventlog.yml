@@ -35,8 +35,9 @@ jobs:
         env:
           CT_PASS: ${{ secrets.CT_PASS }}
           GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
-          P750_FROM: "20260819"
+          P750_FROM: "20260818"
           P750_RUN_FROM_TS: "20260819183000"
+          P750_COMBINED_FROM_TS: "20260818000000"
           P750_EVENTLOG_TAB: "Event Log (19 Aug)"
           P750_SUMMARY_TAB: "Summary (19 Aug)"
           P750_RUN_LABEL: "19 Aug new run"
