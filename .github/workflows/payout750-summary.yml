@@ -1,0 +1,23 @@
+name: Project Dominance Opt-ins (Slack)
+
+on:
+  schedule:
+    # 10:00 / 16:00 / 20:00 IST  =  04:30 / 10:30 / 14:30 UTC
+    # (GitHub's scheduler is best-effort and can fire 20-40 min late.)
+    - cron: '30 4,10,14 * * *'
+  workflow_dispatch:
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - run: pip install gspread google-auth requests matplotlib
+      - name: Render Payout750 summary + post to #project-dominance
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.PAYOUT750_SLACK_TOKEN }}
+          SLACK_CHANNEL_ID: ${{ secrets.PAYOUT750_CHANNEL_ID }}
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+        run: python render_payout750_summary.py
