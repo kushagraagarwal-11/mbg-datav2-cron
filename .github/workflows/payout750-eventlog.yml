@@ -53,3 +53,12 @@ jobs:
           P750_RUN_FROM_TS: "20260819183000"
           P750_WHO_TAB: "Opt-ins & Declines — who & when (19 Aug)"
         run: python payout750_who_when.py
+
+      # 4) Ops append — new F2/F3 opt-ins → "Audit/Consent Pending Opt In" and new declines →
+      #    "Did NOT Opt in - Ask why?" (ops sheet 1Q7g74k...). Idempotent (dedup by cspid);
+      #    mobile + zone from CSP_ACCOUNT. Runs after step 3 so it reads the fresh who-when tab.
+      - name: Ops append → Audit/Consent Pending + Declined calling tabs
+        env:
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+          P750_WHO_TAB: "Opt-ins & Declines — who & when (19 Aug)"
+        run: python payout750_audit_pending.py
