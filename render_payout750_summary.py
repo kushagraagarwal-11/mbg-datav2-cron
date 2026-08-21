@@ -60,6 +60,19 @@ def style(tbl, rows, ncol):
 
 
 def render(title, backend, funnel, decision, out):
+    # Show the OPTED-IN count from the real-time backend (all channels, incl. push), not the
+    # lagged export funnel. Recompute the two % columns off the backend number.
+    try:
+        if backend:
+            viewed = int(str(funnel[1][1]).replace(",", ""))
+            declined = int(str(decision[2][1]).replace(",", ""))
+            opted = int(backend); deciders = opted + declined
+            decision[1][1] = str(opted)
+            decision[1][2] = f"{round(100*opted/deciders)}%" if deciders else "-"
+            decision[1][3] = f"{round(100*opted/viewed)}%" if viewed else "-"
+            decision[2][2] = f"{round(100*declined/deciders)}%" if deciders else "-"
+    except Exception:
+        pass
     fig = plt.figure(figsize=(9.2, 5.4)); fig.patch.set_facecolor("white")
     fig.suptitle(title, color=WIOM_PINK, fontsize=16, fontweight="bold", y=0.985)
     sub = f"Opted in (real-time) = {backend}" if backend else ""

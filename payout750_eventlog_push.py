@@ -126,6 +126,7 @@ def backend_optins(from_ts):
            "FROM PROD_DB.CSP_RV_SERVICE_CSP_RV_SERVICE.DOMINANCE_CONSENT "
            "WHERE CONSENT_CHOICE='OPTED_IN' AND COALESCE(_FIVETRAN_DELETED,FALSE)=FALSE "
            f"AND CONSENT_TIMESTAMP >= '{ist} +05:30'::timestamp_tz "
+           "AND CSP_ID NOT ILIKE 'TEST%' AND CSP_ID != 'a0a0b1' "   # drop test/junk consent rows
            "GROUP BY CSP_ID ORDER BY 2")
     return mb_query(sql)
 
@@ -300,10 +301,14 @@ def main():
         add("3 · Reached choice  (scrolled down)",  reached, pv(reached), step(reached, opened), drop(opened, reached))
         add("4 · Made a decision",                  decided, pv(decided), step(decided, reached),drop(reached, decided))
         add("")
+        # Opted-in count = real-time BACKEND (all channels incl. push, test-excluded), not the
+        # lagged banner export. Declines stay export-based (no backend feed). Deciders recomputed.
+        opted_disp = len(be) if be is not None else n_opted
         declined_only = decided - n_opted
+        deciders_disp = opted_disp + declined_only
         hdr_rows.append(len(summ)); add("DECISION", "CSPs", "% of deciders", "% of viewed")
-        add("Opted in  ✅", n_opted,       f"{round(100*n_opted/decided)}%" if decided else "-",       pv(n_opted))
-        add("Declined",     declined_only, f"{round(100*declined_only/decided)}%" if decided else "-", pv(declined_only))
+        add("Opted in  ✅", opted_disp,    f"{round(100*opted_disp/deciders_disp)}%" if deciders_disp else "-", pv(opted_disp))
+        add("Declined",     declined_only, f"{round(100*declined_only/deciders_disp)}%" if deciders_disp else "-", pv(declined_only))
         add("")
         add("Closed  (any exit, incl. abandon)", closed, pv(closed))
         add("Unique CSPs (real cohort)", n_csps)
