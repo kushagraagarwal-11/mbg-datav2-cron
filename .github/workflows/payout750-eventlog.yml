@@ -62,3 +62,11 @@ jobs:
           GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
           P750_WHO_TAB: "Opt-ins & Declines — who & when (19 Aug)"
         run: python payout750_audit_pending.py
+
+      # 5) Push channel — "750 opt in" push (campaign 1787309094): clicks + opt-ins attributed
+      #    to the push → "Push (750 opt-in)" tab.
+      - name: Push channel tracker → "Push (750 opt-in)"
+        env:
+          CT_PASS: ${{ secrets.CT_PASS }}
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+        run: python payout750_push.py
