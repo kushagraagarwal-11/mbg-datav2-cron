@@ -1,0 +1,25 @@
+name: Netbox LIVE_STATUS refresh (every 15 min)
+
+on:
+  schedule:
+    # every 15 min at :07 past (staggered off Data V2 :17 and Audit Approval :37).
+    # GitHub throttles scheduled runs, so real-world freshness lands ~15-30 min.
+    # Idempotent (full rewrite of column L), so a skipped tick costs nothing.
+    - cron: "7,22,37,52 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - name: Refresh LIVE_STATUS column (Charged & Pending Devices New)
+        env:
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+          MB_KEY: ${{ secrets.MB_KEY }}
+        run: python netbox_status_sync.py
