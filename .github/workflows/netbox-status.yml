@@ -1,4 +1,4 @@
-name: Netbox LIVE_STATUS refresh (every 15 min)
+name: Netbox live refresh — cols J+L and Carry Fee CSPs (every 15 min)
 
 on:
   schedule:
@@ -18,8 +18,17 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -r requirements.txt
-      - name: Refresh LIVE_STATUS column (Charged & Pending Devices New)
+      - name: Refresh cols J + L (Charged & Pending Devices New)
         env:
           GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
           MB_KEY: ${{ secrets.MB_KEY }}
         run: python netbox_status_sync.py
+
+      # Runs even if the columns above failed — the two tabs are independent, and
+      # both scripts are idempotent, so a partial tick self-heals on the next one.
+      - name: Refresh Carry Fee CSPs tab (Overall / Delhi / Mumbai / Bharat)
+        if: always()
+        env:
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+          MB_KEY: ${{ secrets.MB_KEY }}
+        run: python carry_fee_csps_tab.py
