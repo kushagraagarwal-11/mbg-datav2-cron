@@ -8,6 +8,7 @@ Four stacked day-by-day summaries — Overall, Delhi, Mumbai, Bharat — from 16
     B # CSPs with Carry fees charged on      C Active Base
     D # CSPs with No carry fee charged on    E Active base
     F # CSPs with No pending devices         G Active base
+    H # Devices Carry Fee charged on          I  ...+ retrieval pending
        (no pending device = none of that CSP's devices is CARRY_FEE_ACTIVE or RETRIEVAL_PENDING)
 
 Scope is read LIVE from the Delhi / Mumbai / Bharat tabs of the same workbook (727 CSPs
@@ -97,6 +98,10 @@ DAYS_SQL = ("SELECT DATEADD(day, SEQ4(), DATE '%s') AS d FROM TABLE(GENERATOR(RO
             % (START.isoformat(), ndays))
 allids = "','".join(sorted(city))
 
+
+def idlist(c):
+    return "','".join(sorted(k for k, v in city.items() if v == c))
+
 # ---- 2) CSPs charged each day ----
 charged = {d.isoformat(): set() for d in days}
 for d, ids in mb("""
@@ -136,43 +141,87 @@ FROM csp_day GROUP BY 1""" % {"ids": allids, "days": DAYS_SQL, "start": START.is
     if bdate:
         asof[k] = str(bdate)[:10]
 
-# ---- 4) pending devices per day, from the SCD2 history ----
+# ---- 4) device state per day, from the SCD2 history ----
 # A device is "pending" if, as of end of that day, it was carry-fee-active or
 # retrieval-pending. Today is capped at now rather than a future end-of-day.
-pending = collections.defaultdict(set)
-for d, _b, ids in mb("""
+# Non-scope CSPs are tagged OTHER rather than filtered out: a base-tab device can
+# sit with a CSP outside the 727 today, and dropping it would miscount col F.
+CITY_CASE = """CASE WHEN %(c)s IN ('%(delhi)s')  THEN 'Delhi'
+                    WHEN %(c)s IN ('%(mumbai)s') THEN 'Mumbai'
+                    WHEN %(c)s IN ('%(bharat)s') THEN 'Bharat'
+                    ELSE 'OTHER' END"""
+
+
+def city_case(col):
+    return CITY_CASE % {"c": col, "delhi": idlist("Delhi"),
+                        "mumbai": idlist("Mumbai"), "bharat": idlist("Bharat")}
+
+
+scd = collections.defaultdict(set)     # (day, kind, city) -> device ids
+for d, kind, cty, _b, ids in mb("""
 WITH days AS (%(days)s)
-SELECT d.d, MOD(ABS(HASH(n.DEVICE_ID)), 32) AS b, LISTAGG(n.DEVICE_ID, ',') AS ids
+SELECT d.d,
+       CASE WHEN n.STATUS = 'RETRIEVAL_PENDING' THEN 'RP' ELSE 'CF' END AS kind,
+       %(case)s AS city,
+       MOD(ABS(HASH(n.DEVICE_ID)), 8) AS b,
+       LISTAGG(DISTINCT n.DEVICE_ID, ',') AS ids
 FROM days d
 JOIN %(nb)s n
   ON n._FIVETRAN_START <= LEAST(DATEADD(day,1,d.d)::TIMESTAMP_LTZ, CURRENT_TIMESTAMP())
  AND n._FIVETRAN_END   >  LEAST(DATEADD(day,1,d.d)::TIMESTAMP_LTZ, CURRENT_TIMESTAMP())
 WHERE n.CARRY_FEE_ACTIVE = TRUE OR n.STATUS = 'RETRIEVAL_PENDING'
-GROUP BY 1, 2""" % {"days": DAYS_SQL, "nb": NETBOX}):
+GROUP BY 1, 2, 3, 4""" % {"days": DAYS_SQL, "nb": NETBOX, "case": city_case("n.CSP_ID")}):
     if ids:
-        pending[str(d)[:10]].update(ids.split(","))
+        scd[(str(d)[:10], kind, cty)].update(ids.split(","))
 
 # per (day, csp) count of pending devices, restricted to the base tab's device list
+CITIES = ("Delhi", "Mumbai", "Bharat")
 npend = {}
-for k, devs in pending.items():
+for dt in days:
+    k = dt.isoformat()
+    allpend = set()
+    for kind in ("CF", "RP"):
+        for cty in CITIES + ("OTHER",):
+            allpend |= scd[(k, kind, cty)]
     c = collections.Counter()
-    for dv in devs:
+    for dv in allpend:
         owner = dev2csp.get(dv)
         if owner:
             c[owner] += 1
     npend[k] = c
 
+# ---- 4b) devices carry fee was actually CHARGED on (the money leg), per day x city ----
+# Ledger fact, deliberately NOT restricted to the base tab: that tab is a current
+# snapshot and has already dropped returned devices, which would undercount history.
+charged_dev = collections.defaultdict(set)
+for d, cty, _b, ids in mb("""
+WITH ch AS (
+  SELECT DATE(w.CREATED_AT) AS d, w.CSP_ID, TRIM(f.value::string) AS dev
+  FROM PROD_DB.CSP_PAYMENT_SETTLEMENT_SERVICE_CSP_PAYMENT_SETTLEMENT_SERVICE.WALLET_LEDGER_ENTRIES w,
+       LATERAL SPLIT_TO_TABLE(TRY_PARSE_JSON(w.REMARKS):device_id::string, ',') f
+  WHERE w.ENTRY_TYPE = 'CARRY_FEE' AND w._FIVETRAN_ACTIVE = TRUE AND w.CREATED_AT >= '%(start)s'
+    AND w.CSP_ID IN ('%(ids)s'))
+SELECT d, %(case)s AS city, MOD(ABS(HASH(dev)), 8) AS b, LISTAGG(DISTINCT dev, ',') AS ids
+FROM ch GROUP BY 1, 2, 3""" % {"start": START.isoformat(), "ids": allids,
+                               "case": city_case("CSP_ID")}):
+    if ids:
+        charged_dev[(str(d)[:10], cty)].update(ids.split(","))
+
 # ---- 5) roll up per day x city ----
 HDR = ["", "# CSPs with Carry fees charged on", "Active Base",
        "# CSPs with No carry fee charged on", "Active base",
-       "# CSPs with No pending devices (i.e. no carry fees + retrieval pending)", "Active base"]
+       "# CSPs with No pending devices (i.e. no carry fees + retrieval pending)", "Active base",
+       "# Devices Carry Fee charged on",
+       "# Devices Carry Fee charged on + retrival pending"]
 blocks = [("Overall", len(city)), ("Delhi", counts["Delhi"]),
           ("Mumbai", counts["Mumbai"]), ("Bharat", counts["Bharat"])]
+NCOL = len(HDR)
 
 grid, stale = [], []
 for bi, (name, n) in enumerate(blocks):
     members = sorted(city) if name == "Overall" else sorted(c for c in city if city[c] == name)
-    grid.append(["%s (%d CSPs)" % (name, n), "", "", "", "", "", ""])
+    towns = CITIES if name == "Overall" else (name,)
+    grid.append(["%s (%d CSPs)" % (name, n)] + [""] * (NCOL - 1))
     grid.append(HDR)
     for dt in days:
         k = dt.isoformat()
@@ -180,19 +229,24 @@ for bi, (name, n) in enumerate(blocks):
         yes = [c for c in members if c in chg]
         no = [c for c in members if c not in chg]
         clear = [c for c in members if pc.get(c, 0) == 0]
+        # device-level: union across the block's cities (a device belongs to one CSP,
+        # so the city sets are disjoint and Overall is just their union)
+        dch = set().union(*[charged_dev[(k, t)] for t in towns]) if towns else set()
+        drp = set().union(*[scd[(k, "RP", t)] for t in towns]) if towns else set()
         if bi == 0 and asof.get(k) and asof[k] != k:
             stale.append("%s (base as of %s)" % (k, asof[k]))
         grid.append([dt.strftime("%dth %B").lstrip("0"),
                      len(yes), sum(base.get(c, 0) for c in yes),
                      len(no), sum(base.get(c, 0) for c in no),
-                     len(clear), sum(base.get(c, 0) for c in clear)])
+                     len(clear), sum(base.get(c, 0) for c in clear),
+                     len(dch), len(dch | drp)])
     if bi < len(blocks) - 1:
-        grid.append([""] * 7)
+        grid.append([""] * NCOL)
 
 ws = sh.get_worksheet_by_id(TAB_GID)
 if ws.row_count < len(grid):
     ws.add_rows(len(grid) - ws.row_count + 20)
-ws.update(values=grid, range_name="A1:G%d" % len(grid), value_input_option="USER_ENTERED")
+ws.update(values=grid, range_name="A1:I%d" % len(grid), value_input_option="USER_ENTERED")
 ws.update_note("A1",
                "Auto-refreshed ~every 15 min by mbg-datav2-cron / netbox-status.yml\n"
                "Scope read live from the Delhi/Mumbai/Bharat tabs.\n"
@@ -201,7 +255,8 @@ ws.update_note("A1",
                "Last update: %s IST" % datetime.datetime.now(IST).strftime("%Y-%m-%d %H:%M"))
 
 ov = grid[1 + ndays]        # Overall block: title, header, then one row per day
-log("wrote A1:G%d — %d days x 4 blocks; Overall %s: %s charged / %s not / %s no-pending"
-    % (len(grid), ndays, days[-1].isoformat(), ov[1], ov[3], ov[5]))
+log("wrote A1:I%d — %d days x 4 blocks; Overall %s: %s charged / %s not / %s no-pending"
+    "; devices %s charged, %s charged+RP"
+    % (len(grid), ndays, days[-1].isoformat(), ov[1], ov[3], ov[5], ov[7], ov[8]))
 if stale:
     log("carried base forward for: %s" % ", ".join(stale))
