@@ -21,7 +21,8 @@ or Mumbai tab.
   pending      = device state reconstructed from the NETBOX_CUSTODY SCD2 history
                  (_FIVETRAN_START/_FIVETRAN_END) as of end of that day, restricted to the
                  devices listed on the 'Charged & Pending Devices New' tab and attributed
-                 to the CSP that tab pairs them with.
+                 to the CSP that tab pairs them with. Cols F-I all share this universe,
+                 so col I ties to the city tabs' own col H sum (Delhi = 4872 on 24-Aug).
 Creds from env (GitHub Actions secrets); falls back to local files for laptop runs."""
 import os, json, datetime, collections, urllib.request as U
 
@@ -146,66 +147,47 @@ FROM csp_day GROUP BY 1""" % {"ids": allids, "days": DAYS_SQL, "start": START.is
 # retrieval-pending. Today is capped at now rather than a future end-of-day.
 # Non-scope CSPs are tagged OTHER rather than filtered out: a base-tab device can
 # sit with a CSP outside the 727 today, and dropping it would miscount col F.
-CITY_CASE = """CASE WHEN %(c)s IN ('%(delhi)s')  THEN 'Delhi'
-                    WHEN %(c)s IN ('%(mumbai)s') THEN 'Mumbai'
-                    WHEN %(c)s IN ('%(bharat)s') THEN 'Bharat'
-                    ELSE 'OTHER' END"""
-
-
-def city_case(col):
-    return CITY_CASE % {"c": col, "delhi": idlist("Delhi"),
-                        "mumbai": idlist("Mumbai"), "bharat": idlist("Bharat")}
-
-
-scd = collections.defaultdict(set)     # (day, kind, city) -> device ids
-for d, kind, cty, _b, ids in mb("""
-WITH days AS (%(days)s)
-SELECT d.d,
-       CASE WHEN n.STATUS = 'RETRIEVAL_PENDING' THEN 'RP' ELSE 'CF' END AS kind,
-       %(case)s AS city,
-       MOD(ABS(HASH(n.DEVICE_ID)), 8) AS b,
+# Emitted as two explicit kinds rather than a CASE, so a device that is somehow both
+# carry-fee-active AND retrieval-pending lands in both sets instead of silently only RP.
+scd = collections.defaultdict(set)     # (day, kind) -> device ids
+for d, kind, _b, ids in mb("""
+WITH days AS (%(days)s),
+kinds AS (SELECT 'CF' AS kind UNION ALL SELECT 'RP')
+SELECT d.d, k.kind, MOD(ABS(HASH(n.DEVICE_ID)), 8) AS b,
        LISTAGG(DISTINCT n.DEVICE_ID, ',') AS ids
 FROM days d
 JOIN %(nb)s n
   ON n._FIVETRAN_START <= LEAST(DATEADD(day,1,d.d)::TIMESTAMP_LTZ, CURRENT_TIMESTAMP())
  AND n._FIVETRAN_END   >  LEAST(DATEADD(day,1,d.d)::TIMESTAMP_LTZ, CURRENT_TIMESTAMP())
-WHERE n.CARRY_FEE_ACTIVE = TRUE OR n.STATUS = 'RETRIEVAL_PENDING'
-GROUP BY 1, 2, 3, 4""" % {"days": DAYS_SQL, "nb": NETBOX, "case": city_case("n.CSP_ID")}):
+JOIN kinds k
+  ON (k.kind = 'CF' AND n.CARRY_FEE_ACTIVE = TRUE)
+  OR (k.kind = 'RP' AND n.STATUS = 'RETRIEVAL_PENDING')
+GROUP BY 1, 2, 3""" % {"days": DAYS_SQL, "nb": NETBOX}):
     if ids:
-        scd[(str(d)[:10], kind, cty)].update(ids.split(","))
+        scd[(str(d)[:10], kind)].update(ids.split(","))
 
-# per (day, csp) count of pending devices, restricted to the base tab's device list
+# Everything device-level is attributed via the base tab (device -> CSP in col A) and
+# restricted to the devices that tab lists, which is how the sheet's own col H counts
+# them. Cols F/G/H/I therefore all share one device universe.
 CITIES = ("Delhi", "Mumbai", "Bharat")
+cf_by_csp, rp_by_csp = {}, {}
 npend = {}
 for dt in days:
     k = dt.isoformat()
-    allpend = set()
-    for kind in ("CF", "RP"):
-        for cty in CITIES + ("OTHER",):
-            allpend |= scd[(k, kind, cty)]
-    c = collections.Counter()
-    for dv in allpend:
+    cfc, rpc, un = collections.Counter(), collections.Counter(), collections.Counter()
+    for dv in scd[(k, "CF")]:
         owner = dev2csp.get(dv)
         if owner:
-            c[owner] += 1
-    npend[k] = c
-
-# ---- 4b) devices carry fee was actually CHARGED on (the money leg), per day x city ----
-# Ledger fact, deliberately NOT restricted to the base tab: that tab is a current
-# snapshot and has already dropped returned devices, which would undercount history.
-charged_dev = collections.defaultdict(set)
-for d, cty, _b, ids in mb("""
-WITH ch AS (
-  SELECT DATE(w.CREATED_AT) AS d, w.CSP_ID, TRIM(f.value::string) AS dev
-  FROM PROD_DB.CSP_PAYMENT_SETTLEMENT_SERVICE_CSP_PAYMENT_SETTLEMENT_SERVICE.WALLET_LEDGER_ENTRIES w,
-       LATERAL SPLIT_TO_TABLE(TRY_PARSE_JSON(w.REMARKS):device_id::string, ',') f
-  WHERE w.ENTRY_TYPE = 'CARRY_FEE' AND w._FIVETRAN_ACTIVE = TRUE AND w.CREATED_AT >= '%(start)s'
-    AND w.CSP_ID IN ('%(ids)s'))
-SELECT d, %(case)s AS city, MOD(ABS(HASH(dev)), 8) AS b, LISTAGG(DISTINCT dev, ',') AS ids
-FROM ch GROUP BY 1, 2, 3""" % {"start": START.isoformat(), "ids": allids,
-                               "case": city_case("CSP_ID")}):
-    if ids:
-        charged_dev[(str(d)[:10], cty)].update(ids.split(","))
+            cfc[owner] += 1
+    for dv in scd[(k, "RP")]:
+        owner = dev2csp.get(dv)
+        if owner:
+            rpc[owner] += 1
+    for dv in scd[(k, "CF")] | scd[(k, "RP")]:
+        owner = dev2csp.get(dv)
+        if owner:
+            un[owner] += 1
+    cf_by_csp[k], rp_by_csp[k], npend[k] = cfc, rpc, un
 
 # ---- 5) roll up per day x city ----
 HDR = ["", "# CSPs with Carry fees charged on", "Active Base",
@@ -220,26 +202,23 @@ NCOL = len(HDR)
 grid, stale = [], []
 for bi, (name, n) in enumerate(blocks):
     members = sorted(city) if name == "Overall" else sorted(c for c in city if city[c] == name)
-    towns = CITIES if name == "Overall" else (name,)
     grid.append(["%s (%d CSPs)" % (name, n)] + [""] * (NCOL - 1))
     grid.append(HDR)
     for dt in days:
         k = dt.isoformat()
         base, chg, pc = r15.get(k, {}), charged.get(k, set()), npend.get(k, {})
+        cfc, rpc = cf_by_csp.get(k, {}), rp_by_csp.get(k, {})
         yes = [c for c in members if c in chg]
         no = [c for c in members if c not in chg]
         clear = [c for c in members if pc.get(c, 0) == 0]
-        # device-level: union across the block's cities (a device belongs to one CSP,
-        # so the city sets are disjoint and Overall is just their union)
-        dch = set().union(*[charged_dev[(k, t)] for t in towns]) if towns else set()
-        drp = set().union(*[scd[(k, "RP", t)] for t in towns]) if towns else set()
         if bi == 0 and asof.get(k) and asof[k] != k:
             stale.append("%s (base as of %s)" % (k, asof[k]))
         grid.append([dt.strftime("%dth %B").lstrip("0"),
                      len(yes), sum(base.get(c, 0) for c in yes),
                      len(no), sum(base.get(c, 0) for c in no),
                      len(clear), sum(base.get(c, 0) for c in clear),
-                     len(dch), len(dch | drp)])
+                     sum(cfc.get(c, 0) for c in members),
+                     sum(pc.get(c, 0) for c in members)])
     if bi < len(blocks) - 1:
         grid.append([""] * NCOL)
 
