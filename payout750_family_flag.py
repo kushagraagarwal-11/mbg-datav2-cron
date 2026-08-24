@@ -26,6 +26,9 @@ HG      = {"X-CleverTap-Account-Id": CT_ACC, "X-CleverTap-Passcode": CT_PASS}
 MB_KEY  = os.environ.get("METABASE_KEY", "mb_1dsbxsJfyROPsVyNpifJ8hTTlIDG85+qNKRo91KDnb4=")
 FLAG    = os.environ.get("P750_FLAG_PROP", "p750_decided")
 FROM    = int(os.environ.get("P750_FROM", "20260818"))
+# p750_redeclined = declined AT/AFTER this ts (YYYYMMDDHHMMSS) — a NEW decline in the re-pitch round,
+# so an OLD decline (before this) doesn't suppress a re-pitch, but declining AGAIN does.
+REDECLINE_FROM = os.environ.get("P750_REDECLINE_FROM", "20260824133000")
 
 
 def mb(sql):
@@ -53,16 +56,19 @@ def export(ev, frm, to):
 
 
 def declined_cspids():
-    """cspids that DECLINED via the banner (Payout750_Declined, or Closed with choice=later)."""
-    s = set()
+    """cspids that DECLINED via the banner (Payout750_Declined, or Closed with choice=later).
+    Returns {cspid: latest_decline_ts (YYYYMMDDHHMMSS string)} so the caller can split
+    OLD declines (before the re-pitch) from NEW ones (declined again)."""
+    m = {}
     tom = int((datetime.datetime.now() + datetime.timedelta(days=1)).strftime("%Y%m%d"))
     for ev in ("Payout750_Declined", "Payout750_Closed"):
         for r in export(ev, FROM, tom):
             ep = r.get("event_props", {}) or {}
             if ev.endswith("Declined") or (ep.get("choice") == "later"):
                 c = (r.get("profile", {}).get("profileData", {}) or {}).get("cspid", "")
-                if c: s.add(c)
-    return s
+                ts = str(r.get("ts", ""))
+                if c: m[c] = max(m.get(c, ""), ts)
+    return m
 
 
 def main():
@@ -73,9 +79,13 @@ def main():
     opted = set(str(r[0]) for r in mb(
         "SELECT DISTINCT CSP_ID FROM PROD_DB.CSP_RV_SERVICE_CSP_RV_SERVICE.DOMINANCE_CONSENT "
         "WHERE CONSENT_CHOICE='OPTED_IN' AND COALESCE(_FIVETRAN_DELETED,FALSE)=FALSE AND CSP_ID IS NOT NULL"))
-    declined = declined_cspids()
+    declined_map = declined_cspids()
+    declined = set(declined_map)
+    # a NEW decline (declined AGAIN in the re-pitch round) = declined at/after REDECLINE_FROM
+    redeclined = {c for c, ts in declined_map.items() if ts >= REDECLINE_FROM}
     decided = sorted(opted | declined)
-    print(f"decided cspids: {len(decided)}  (opted {len(opted)} + declined {len(declined)})", flush=True)
+    print(f"decided cspids: {len(decided)}  (opted {len(opted)} + declined {len(declined)}); "
+          f"re-declined (>= {REDECLINE_FROM}): {len(redeclined)}", flush=True)
     if not decided:
         print("no decided cspids — nothing to flag"); return
     inlist = ",".join("'%s'" % c.replace("'", "") for c in decided)
@@ -87,9 +97,11 @@ def main():
     id2csp = {str(r[0]): r[1] for r in rows if r[0]}
     idents = sorted(id2csp)
     print(f"identities to flag={len(idents)}", flush=True)
-    # 3) write TWO family flags (profile upload fires no campaign):
-    #    p750_decided  = "true"  -> family did ANY action (accept OR reject) — use to NOT re-pitch anyone
-    #    p750_optedin  = "true"  -> family ACCEPTED only — use to re-pitch DECLINERS (exclude only accepters)
+    # 3) write THREE family flags (profile upload fires no campaign):
+    #    p750_decided    = "true" -> family did ANY action (accept OR reject) — fresh campaigns, don't re-pitch anyone
+    #    p750_optedin    = "true" -> family ACCEPTED — use to re-pitch DECLINERS (exclude only accepters)
+    #    p750_redeclined = "true" -> family declined AGAIN in the re-pitch round (decline ts >= REDECLINE_FROM)
+    #    Re-pitch "Who" = p750_optedin != true AND p750_redeclined != true.
     B, ok, unproc = 500, 0, 0
     for i in range(0, len(idents), B):
         batch = idents[i:i + B]
@@ -97,6 +109,7 @@ def main():
         for x in batch:
             pd = {FLAG: "true"}
             if id2csp[x] in opted: pd["p750_optedin"] = "true"
+            if id2csp[x] in redeclined: pd["p750_redeclined"] = "true"
             d.append({"identity": x, "type": "profile", "profileData": pd})
         body = json.dumps({"d": d}).encode()
         for attempt in range(3):
@@ -106,7 +119,7 @@ def main():
                 break
             except Exception as e:
                 print("  retry upload", str(e)[:80], flush=True); time.sleep(4)
-    print(f"flagged {ok} profiles: p750_decided (any action) + p750_optedin (accepters only)  (unprocessed {unproc})", flush=True)
+    print(f"flagged {ok} profiles: p750_decided + p750_optedin ({len(opted)} fam) + p750_redeclined ({len(redeclined)} fam)  (unprocessed {unproc})", flush=True)
 
 
 if __name__ == "__main__":

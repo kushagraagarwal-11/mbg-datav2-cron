@@ -23,9 +23,12 @@ jobs:
       #    cspid that opted in (DOMINANCE_CONSENT), so the banner stops for the whole family
       #    (owner + admin), not just the person who clicked. Profile writes fire nothing.
       #    Add to each flow's "Who": p750_decided does not equal true.
-      - name: Family suppression flag (p750_decided)
+      - name: Family suppression flag (p750_decided / p750_optedin / p750_redeclined)
         env:
           CT_PASS: ${{ secrets.CT_PASS }}
+          # re-pitch go-live: declines at/after this ts count as "declined again" -> suppress.
+          # Older declines don't, so the re-pitch still reaches the previous decliners.
+          P750_REDECLINE_FROM: "20260824133000"
         run: python payout750_family_flag.py
 
       # 2) New-run tracker — ONLY the 19-Aug campaigns (Flow1 1787145338 / Flow2 1787145880 /
