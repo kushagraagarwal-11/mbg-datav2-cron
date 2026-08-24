@@ -81,15 +81,24 @@ def main():
     inlist = ",".join("'%s'" % c.replace("'", "") for c in decided)
     # 2) ALL CleverTap identities of those cspids (owner + admin + any) from the profile mirror.
     #    NOTE: PROFILE_DATA's column is CSPID (no underscore), unlike DOMINANCE_CONSENT's CSP_ID.
-    idents = sorted({str(r[0]) for r in mb(
-        f"SELECT DISTINCT IDENTITY FROM PROD_DB.CLEVERTAP_CSP_API.PROFILE_DATA "
-        f"WHERE CSPID IN ({inlist}) AND COALESCE(_FIVETRAN_DELETED,FALSE)=FALSE AND IDENTITY IS NOT NULL") if r[0]})
+    rows = mb(
+        f"SELECT DISTINCT IDENTITY, CSPID FROM PROD_DB.CLEVERTAP_CSP_API.PROFILE_DATA "
+        f"WHERE CSPID IN ({inlist}) AND COALESCE(_FIVETRAN_DELETED,FALSE)=FALSE AND IDENTITY IS NOT NULL")
+    id2csp = {str(r[0]): r[1] for r in rows if r[0]}
+    idents = sorted(id2csp)
     print(f"identities to flag={len(idents)}", flush=True)
-    # 3) write FLAG='true' to every one of them — profile upload fires no campaign
+    # 3) write TWO family flags (profile upload fires no campaign):
+    #    p750_decided  = "true"  -> family did ANY action (accept OR reject) — use to NOT re-pitch anyone
+    #    p750_optedin  = "true"  -> family ACCEPTED only — use to re-pitch DECLINERS (exclude only accepters)
     B, ok, unproc = 500, 0, 0
     for i in range(0, len(idents), B):
         batch = idents[i:i + B]
-        body = json.dumps({"d": [{"identity": x, "type": "profile", "profileData": {FLAG: "true"}} for x in batch]}).encode()
+        d = []
+        for x in batch:
+            pd = {FLAG: "true"}
+            if id2csp[x] in opted: pd["p750_optedin"] = "true"
+            d.append({"identity": x, "type": "profile", "profileData": pd})
+        body = json.dumps({"d": d}).encode()
         for attempt in range(3):
             try:
                 r = json.loads(urllib.request.urlopen(urllib.request.Request(CT + "/1/upload", data=body, headers=HCT), timeout=90).read().decode())
@@ -97,7 +106,7 @@ def main():
                 break
             except Exception as e:
                 print("  retry upload", str(e)[:80], flush=True); time.sleep(4)
-    print(f"flagged {ok} profiles {FLAG}=true  (unprocessed {unproc})", flush=True)
+    print(f"flagged {ok} profiles: p750_decided (any action) + p750_optedin (accepters only)  (unprocessed {unproc})", flush=True)
 
 
 if __name__ == "__main__":
