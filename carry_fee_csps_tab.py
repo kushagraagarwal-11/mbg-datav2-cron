@@ -15,8 +15,8 @@ Scope is read LIVE from the Delhi / Mumbai / Bharat tabs of the same workbook (7
 today), so editing those tabs re-scopes this one. 'Bharat' = every CSP not in the Delhi
 or Mumbai tab.
 
-  charged      = a distinct CARRY_FEE entry in WALLET_LEDGER_ENTRIES on that date
-                 (launch day 16-Aug wrote ~2 entries per CSP, hence DISTINCT not COUNT(*))
+  charged      = the CSP held at least one carry-fee-active device that day
+                 (NETBOX_CUSTODY only — the wallet ledger is not used anywhere here)
   Active Base  = ACTIVE_R15_CUSTOMERS from PROD_DB.PUBLIC.CUSTOMER_BASE that day
   pending      = device state reconstructed from the NETBOX_CUSTODY SCD2 history
                  (_FIVETRAN_START/_FIVETRAN_END) as of end of that day, restricted to the
@@ -103,16 +103,12 @@ allids = "','".join(sorted(city))
 def idlist(c):
     return "','".join(sorted(k for k, v in city.items() if v == c))
 
-# ---- 2) CSPs charged each day ----
-charged = {d.isoformat(): set() for d in days}
-for d, ids in mb("""
-SELECT DATE(CREATED_AT) AS d, LISTAGG(DISTINCT CSP_ID, ',') AS ids
-FROM PROD_DB.CSP_PAYMENT_SETTLEMENT_SERVICE_CSP_PAYMENT_SETTLEMENT_SERVICE.WALLET_LEDGER_ENTRIES
-WHERE ENTRY_TYPE = 'CARRY_FEE' AND _FIVETRAN_ACTIVE = TRUE AND CREATED_AT >= '%s'
-GROUP BY 1""" % START.isoformat()):
-    k = str(d)[:10]
-    if k in charged and ids:
-        charged[k] = set(ids.split(","))
+# ---- 2) (removed) the wallet ledger is deliberately NOT used ----
+# Cols B/D used to count CSPs with a CARRY_FEE entry in WALLET_LEDGER_ENTRIES.
+# Dropped per the user: NETBOX_CUSTODY only. The ledger also dates a charge to the
+# day it runs while the fee it collects is for D-1, so ledger dates and custody
+# dates never lined up. A CSP now counts as "charged on day D" when it held at
+# least one carry-fee-active device that day — same source as cols F/H/I.
 
 # ---- 3) per-CSP active base per day (as-of: CUSTOMER_BASE lands a day behind) ----
 r15, asof = {}, {}
@@ -206,10 +202,10 @@ for bi, (name, n) in enumerate(blocks):
     grid.append(HDR)
     for dt in days:
         k = dt.isoformat()
-        base, chg, pc = r15.get(k, {}), charged.get(k, set()), npend.get(k, {})
+        base, pc = r15.get(k, {}), npend.get(k, {})
         cfc, rpc = cf_by_csp.get(k, {}), rp_by_csp.get(k, {})
-        yes = [c for c in members if c in chg]
-        no = [c for c in members if c not in chg]
+        yes = [c for c in members if cfc.get(c, 0) > 0]
+        no = [c for c in members if cfc.get(c, 0) == 0]
         clear = [c for c in members if pc.get(c, 0) == 0]
         if bi == 0 and asof.get(k) and asof[k] != k:
             stale.append("%s (base as of %s)" % (k, asof[k]))
