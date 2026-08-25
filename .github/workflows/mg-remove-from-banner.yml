@@ -1,0 +1,27 @@
+name: MG remove-from-banner (daily 11pm IST)
+
+on:
+  schedule:
+    # 17:30 UTC = 23:00 IST daily. GitHub's scheduler is best-effort (may lag 10-30 min);
+    # the job is idempotent (a CSP already removed is a no-op), so a late run is harmless.
+    - cron: "30 17 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  remove:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+
+      # Reads the "Remove from MG" tab (CSPs flagged for MG removal on the Enforcement Hub)
+      # and deletes those CSPs' rows from "Show Banner - Install MG" and "Show Banner - Sehat MG"
+      # so they stop being shown the MG banner. Match on CSP ID (col A); header never touched.
+      - name: Remove flagged CSPs from banner audience tabs
+        env:
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+        run: python mg_remove_from_banner.py
