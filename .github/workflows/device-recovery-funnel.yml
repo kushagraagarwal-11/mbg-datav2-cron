@@ -1,0 +1,24 @@
+name: Device Recovery Funnel (daily 21:00 IST)
+
+on:
+  schedule:
+    - cron: '30 15 * * *'      # 21:00 IST
+  workflow_dispatch:
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - run: pip install gspread google-auth requests matplotlib
+      - name: Render + post funnel snapshot
+        env:
+          # Project Dominance bot — the one invited to the target channel.
+          SLACK_BOT_TOKEN: ${{ secrets.PAYOUT750_SLACK_TOKEN }}
+          SLACK_CHANNEL_ID: ${{ secrets.DEVICE_FUNNEL_CHANNEL_ID }}
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+          MB_KEY: ${{ secrets.MB_KEY }}
+        run: python render_device_recovery_funnel.py
