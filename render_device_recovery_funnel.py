@@ -71,9 +71,15 @@ def load_scope():
     def norm(x):
         x = str(x or "").strip()
         return x[:-2] if x.endswith(".0") else x
-    tracker = {norm(r[2]): norm(r[0])
-               for r in sh.get_worksheet_by_id(2056261339).get_values("A2:C")
-               if len(r) >= 3 and norm(r[2])}
+    # Col M on the base tab is the sheet's own exclusion flag — the city tabs'
+    # COUNTIFS carry a `M:M, ""` criterion, so a row with anything in M is
+    # deliberately left out of their counts. Honour it here or the "on tracker"
+    # figures run above the Carry Fee CSPs tab this chart claims to tie to.
+    tracker = {}
+    for r in sh.get_worksheet_by_id(2056261339).get_values("A2:M"):
+        r = list(r) + [""] * 13
+        if norm(r[2]) and not str(r[12]).strip():
+            tracker[norm(r[2])] = norm(r[0])
     return city, tracker
 
 
