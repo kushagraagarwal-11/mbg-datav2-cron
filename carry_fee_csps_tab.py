@@ -84,11 +84,21 @@ def norm(x):
     return x[:-2] if x.endswith(".0") else x
 
 
+# Col M on the base tab is the sheet's own exclusion flag: the city tabs' COUNTIFS
+# carry a `M:M, ""` criterion, so any row with something in M is deliberately kept
+# out of their counts. Honour it here too, or this tab drifts above the city tabs.
 dev2csp = {}
-for r in sh.get_worksheet_by_id(BASE_GID).get_values("A2:C"):
-    if len(r) >= 3 and norm(r[2]):
-        dev2csp[norm(r[2])] = norm(r[0])
-log("base tab: %d devices across %d CSPs" % (len(dev2csp), len(set(dev2csp.values()))))
+excluded = 0
+for r in sh.get_worksheet_by_id(BASE_GID).get_values("A2:M"):
+    r = list(r) + [""] * 13
+    if not norm(r[2]):
+        continue
+    if str(r[12]).strip():
+        excluded += 1
+        continue
+    dev2csp[norm(r[2])] = norm(r[0])
+log("base tab: %d devices across %d CSPs (%d excluded via col M)"
+    % (len(dev2csp), len(set(dev2csp.values())), excluded))
 
 today = datetime.datetime.now(IST).date()
 ndays = (today - START).days + 1
