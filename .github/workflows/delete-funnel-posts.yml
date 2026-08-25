@@ -1,0 +1,18 @@
+name: Delete funnel posts (manual)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  purge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - run: pip install requests
+      - name: Delete the funnel posts
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.PAYOUT750_SLACK_TOKEN }}
+          SLACK_CHANNEL_ID: ${{ secrets.DEVICE_FUNNEL_CHANNEL_ID }}
+        run: python delete_funnel_posts.py
