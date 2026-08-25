@@ -28,7 +28,7 @@ jobs:
           CT_PASS: ${{ secrets.CT_PASS }}
           # re-pitch go-live: declines at/after this ts count as "declined again" -> suppress.
           # Older declines don't, so the re-pitch still reaches the previous decliners.
-          P750_REDECLINE_FROM: "20260824133000"
+          P750_REDECLINE_FROM: "20260825000000"
         run: python payout750_family_flag.py
 
       # 2) New-run tracker — ONLY the 19-Aug campaigns (Flow1 1787145338 / Flow2 1787145880 /

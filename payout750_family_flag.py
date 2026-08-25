@@ -28,7 +28,7 @@ FLAG    = os.environ.get("P750_FLAG_PROP", "p750_decided")
 FROM    = int(os.environ.get("P750_FROM", "20260818"))
 # p750_redeclined = declined AT/AFTER this ts (YYYYMMDDHHMMSS) — a NEW decline in the re-pitch round,
 # so an OLD decline (before this) doesn't suppress a re-pitch, but declining AGAIN does.
-REDECLINE_FROM = os.environ.get("P750_REDECLINE_FROM", "20260824133000")
+REDECLINE_FROM = os.environ.get("P750_REDECLINE_FROM", "20260825000000")
 
 
 def mb(sql):
