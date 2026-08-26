@@ -21,10 +21,22 @@ from google.oauth2 import service_account
 
 MB_KEY = os.environ.get("METABASE_KEY", "mb_1dsbxsJfyROPsVyNpifJ8hTTlIDG85+qNKRo91KDnb4=")
 SHEET_ID = "1XHqjybQYKyfCpgdraPiL32GBm2R2wf-CguxlHalmu8M"
-JULY_TAB = "MG Payout (formula-integrated) - July"
+TRACKER_TAB = "MG Tracker CSP"                          # enrolled cohort + enrollment dates
 AUG_TAB = "MG Payout (formula-integrated) - August"
 IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+
+
+def parse_date(s):
+    s = (s or "").strip()
+    for fmt in ("%d-%b-%Y", "%d-%b-%y", "%d-%b"):
+        try:
+            dt = datetime.datetime.strptime(s, fmt)
+            if dt.year == 1900: dt = dt.replace(year=2026)
+            return dt.strftime("%Y-%m-%d")
+        except Exception:
+            pass
+    return s
 
 
 def mb(sql):
@@ -51,14 +63,35 @@ def main():
     gc = gspread.authorize(creds())
     ss = gc.open_by_key(SHEET_ID)
 
-    # 1) cohort from the July tab: Name, Partner ID, CSP ID, Flow, Enrollment date
-    jv = ss.worksheet(JULY_TAB).get_all_values()
-    cohort = []
-    for r in jv[2:]:                                   # skip banner + header
-        if not r or not r[2].strip() or r[0].strip().upper() == "TOTAL": continue
-        cohort.append({"name": r[0], "pid": r[1], "cspid": r[2].strip(), "flow": r[3], "enroll": r[4]})
+    # 1a) disintermediation removals from the "Remove from MG" tab (exclude from payout)
+    disint, removed_all = set(), set()
+    rt = next((w for w in ss.worksheets() if w.title.startswith("Remove from MG")), None)
+    if rt is not None:
+        rv = rt.get_all_values()
+        hi = next((i for i, row in enumerate(rv) if "CSP ID" in row and any("Violation" in (c or "") for c in row)), None)
+        if hi is not None:
+            HH = rv[hi]; idc = HH.index("CSP ID"); ivc = next(j for j, c in enumerate(HH) if "Violation" in (c or ""))
+            for row in rv[hi + 1:]:
+                if len(row) > max(idc, ivc) and row[idc].strip().startswith("a0"):
+                    removed_all.add(row[idc].strip())
+                    if "disintermediation" in (row[ivc] or "").lower(): disint.add(row[idc].strip())
+    print(f"remove-from-MG: {len(removed_all)} total, {len(disint)} disintermediation", flush=True)
+
+    # 1b) cohort = currently ENROLLED CSPs from "MG Tracker CSP", minus disintermediation removals
+    tv = ss.worksheet(TRACKER_TAB).get_all_values()
+    TH = tv[1]
+    idx = {n: TH.index(n) for n in ("Partner ID", "CSP ID", "Name", "Flow", "Audit done / Enrolled", "Enrolment date")}
+    cohort, excl = [], 0
+    for r in tv[2:]:
+        if len(r) <= idx["Enrolment date"]: continue
+        if r[idx["Audit done / Enrolled"]].strip().upper() != "ENROLLED": continue
+        cspid = r[idx["CSP ID"]].strip()
+        if not cspid: continue
+        if cspid in disint: excl += 1; continue
+        cohort.append({"name": r[idx["Name"]], "pid": r[idx["Partner ID"]], "cspid": cspid,
+                       "flow": r[idx["Flow"]], "enroll": parse_date(r[idx["Enrolment date"]])})
     cspids = [c["cspid"] for c in cohort]
-    print(f"cohort from July tab: {len(cspids)} CSPs", flush=True)
+    print(f"enrolled cohort: {len(cohort)} CSPs (excluded {excl} disintermediation-removed)", flush=True)
 
     # 2) August installs + denom (tech-assigned) + total leads, month-to-date, from IEC
     inlist = ",".join("'%s'" % c.replace("'", "") for c in cspids)
@@ -81,7 +114,8 @@ FROM agg GROUP BY CSP_ID""")
     print(f"IEC returned August data for {len(aug)} CSPs", flush=True)
 
     # 3) build rows (data starts at sheet row 3)
-    banner = ["MG Payout — FORMULA-INTEGRATED — AUGUST (month-to-date, live from IEC) · per-install rate ₹300 for all · "
+    banner = [f"MG Payout — FORMULA-INTEGRATED — AUGUST (month-to-date, live from IEC) · enrolled cohort ({len(cohort)}) "
+              f"from MG Tracker CSP, minus {excl} disintermediation MG-removals · per-install rate ₹300 for all · "
               "≥60% gate · ≤2 leads = min guarantee · MG floor ₹10,000 prorated by August eligible days · "
               f"updated {datetime.datetime.now(IST):%d-%b %H:%M IST}"] + [""] * 17
     header = ["Name", "Partner ID", "CSP ID", "Flow", "Enrollment date", "Eligible days /31",
