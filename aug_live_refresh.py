@@ -169,6 +169,7 @@ def main():
     grid = ws.get_all_values()
 
     updates = []; cur_tbl = None; aug_start = None; wrote = 0
+    wrote_by_table = {}
     for i, row in enumerate(grid):
         a = (row[0] if row else "").strip()
         t = table_of(a)
@@ -200,6 +201,7 @@ def main():
         rng = f"{colletter(aug_start)}{r1}:{colletter(aug_start + 2)}{r1}"
         updates.append({"range": rng, "values": [vals[:3]]})
         wrote += 1
+        wrote_by_table[cur_tbl] = wrote_by_table.get(cur_tbl, 0) + 1
 
     # live title for the recomputed-membership table
     for i, row in enumerate(grid):
@@ -218,6 +220,18 @@ def main():
         base = "MG INSTALL RATE"
     updates.append({"range": "A1", "values": [[
         base + f"  [LIVE: Aug cols L:N auto-refresh 24h (O=Δ% & P=Base/CSP are live formulas); matured>=48h; last run {now:%Y-%m-%d %H:%M IST}]"]]})
+
+    # Guard: a renamed/removed table label would otherwise be skipped silently and the run
+    # would still report success, leaving that table frozen at stale numbers. Fail loudly instead.
+    missing = [t for t in tables if wrote_by_table.get(t, 0) == 0]
+    thin = {t: n for t, n in wrote_by_table.items() if 0 < n < 6}
+    if missing or thin:
+        raise SystemExit(" | ".join([
+            "ABORTED - refusing to write a partial refresh",
+            "tables not found in the sheet: %s" % (missing or "none"),
+            "tables with too few rows: %s" % (thin or "none"),
+            "a table label row in column A was probably renamed, deleted or reordered; "
+            "fix the label (or table_of()) and re-run - nothing was written"]))
 
     ws.batch_update(updates, value_input_option="RAW")
     print(f"wrote {wrote} rows across {len(tables)} tables; {len(updates)} ranges. OK {now:%Y-%m-%d %H:%M IST}", flush=True)
