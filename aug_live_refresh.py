@@ -14,7 +14,8 @@ May-Jun / July / cohorts / counts (cols A:K) are frozen baselines and untouched.
 
 Five tables share the same L:O columns and are refreshed together:
   ALL (710) · MG ENROLLED (477) · MG ENROLLED excl violation CSPs (461) ·
-  CONTROL not-enrolled (233) · CONTROL Sehat-MG enrolled (72) · CONTROL no-MG (161).
+  CONTROL not-enrolled (233) · CONTROL not-enrolled excl no-work CSPs (190) ·
+  CONTROL Sehat-MG enrolled (72) · CONTROL no-MG (161).
 Partition (group / Sehat-subgroup / re-derived cohort / May-Jun baseline) is
 frozen in mgrate_aug_config.json so the split always matches the pasted baseline.
 
@@ -86,16 +87,18 @@ def table_of(label):
     if l.startswith("ALL"):          return "ALL"
     if l.startswith("MG ENROLLED") and "excl" in l.lower(): return "ENR_EXVIOL"
     if l.startswith("MG ENROLLED"):  return "ENROLLED"
+    if l.startswith("CONTROL") and "excl" in l.lower(): return "CTL_EXNOWORK"
     if "Sehat" in l:                 return "CTL_SEHAT"
     if "no MG" in l:                 return "CTL_NOMG"
     if l.startswith("CONTROL"):      return "CONTROL"
     return None
 
 
-def belongs(g, sub, table, viol=0):
+def belongs(g, sub, table, viol=0, nowork=0):
     if table == "ALL":       return True
     if table == "ENROLLED":  return g == "ENROLLED"
     if table == "ENR_EXVIOL": return g == "ENROLLED" and not viol
+    if table == "CTL_EXNOWORK": return g == "CONTROL" and not nowork
     if table == "CONTROL":   return g == "CONTROL"
     if table == "CTL_SEHAT": return g == "CONTROL" and sub == "SEHAT"
     if table == "CTL_NOMG":  return g == "CONTROL" and sub == "NOMG"
@@ -132,14 +135,15 @@ def main():
     print("aug matured pids:", len(aug),
           "tech", sum(v[0] for v in aug.values()), "inst", sum(v[1] for v in aug.values()), flush=True)
 
-    tables = ["ALL", "ENROLLED", "ENR_EXVIOL", "CONTROL", "CTL_SEHAT", "CTL_NOMG"]
+    tables = ["ALL", "ENROLLED", "ENR_EXVIOL", "CONTROL", "CTL_EXNOWORK", "CTL_SEHAT", "CTL_NOMG"]
     agg = {t: defaultdict(lambda: [0, 0, 0, 0]) for t in tables}  # cohort -> aug_tech, aug_inst, mjt, mji
     for pid, rec in cfg.items():
         g, sub, coh, mjt, mji = rec[:5]
         viol = rec[5] if len(rec) > 5 else 0
+        nowork = rec[6] if len(rec) > 6 else 0
         at, ai = aug.get(pid, (0, 0))
         for t in tables:
-            if belongs(g, sub, t, viol):
+            if belongs(g, sub, t, viol, nowork):
                 x = agg[t][coh]; x[0] += at; x[1] += ai; x[2] += mjt; x[3] += mji
 
     def cells(atech, ainst, mjt, mji):
