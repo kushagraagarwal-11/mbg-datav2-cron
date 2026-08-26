@@ -6,9 +6,10 @@ August is anchored the same way as July: a lead counts in August if it reached
 TECHNICIAN_ASSIGNED in August, AND is MATURED
 (>=48h since assignment, so it had a fair window to install). install = OTP /
 completed / step>=7. PAIR GRAIN (matches the July + May-Jun baselines): a lead that was
-technician-assigned to two CSPs counts once for EACH of them; the install is credited to the
-CSP that finally holds the lead, so the other CSP's row is a miss. (Verified: recomputing July
-on this basis reproduces the frozen baseline -- 3127/1662 vs 3145/1670, 53.1% both.) Only the LIVE August columns L:O are rewritten each run —
+technician-assigned to two CSPs counts once for EACH of them; the install is credited to a
+CSP only if it completed under that CSP's own rows, so a CSP that was handed a lead and lost it
+carries it as a miss. (Verified against the frozen July baseline: denom 3127 vs 3145, installs
+1668 vs 1670. Crediting the final holder instead gives 1662 and does NOT reconcile.) Only the LIVE August columns L:O are rewritten each run —
 May-Jun / July / cohorts / counts (cols A:K) are frozen baselines and untouched.
 
 Five tables share the same L:O columns and are refreshed together:
@@ -38,18 +39,15 @@ with src as (select * from PROD_DB.DBT_CSP.TAS_INSTALL_EXECUTION_CANDIDATES),
 pair as (   -- PAIR GRAIN: one row per (lead, CSP) that ever had it technician-assigned
   select CONNECTION_ID, CSP_ID, min(UPDATED_AT) f_ta from src
   where CURRENT_STATE='TECHNICIAN_ASSIGNED' group by 1,2),
-inst as (select CONNECTION_ID,
+instp as (  -- install credited to a CSP only if it completed under THAT CSP's own rows
+  select CONNECTION_ID, CSP_ID,
     max(iff(OTP_VERIFIED=TRUE OR INSTALLATION_COMPLETED_AT is not null OR COMPLETED_STEP>=7,1,0)) i
-  from src where ETL_CURRENT=TRUE group by 1),
-lastr as (select CONNECTION_ID, CSP_ID lc from src where ETL_CURRENT=TRUE
-  qualify row_number() over(partition by CONNECTION_ID order by UPDATED_AT desc)=1),
+  from src group by 1,2),
 csp as (select CSP_ID, PARTNER_ID::string pid from PROD_DB.CSP_GATEWAY_SERVICE_CSP_GATEWAY_SERVICE.CSP_ACCOUNT
   where _fivetran_active=TRUE qualify row_number() over(partition by CSP_ID order by 1)=1)
-select c.pid, count(*) tech,
-       sum(iff(p.CSP_ID=l.lc, coalesce(i.i,0), 0)) inst   -- install credited to the CSP that finally holds the lead
+select c.pid, count(*) tech, sum(coalesce(ip.i,0)) inst
 from pair p join csp c on c.CSP_ID=p.CSP_ID
-  left join inst i on i.CONNECTION_ID=p.CONNECTION_ID
-  left join lastr l on l.CONNECTION_ID=p.CONNECTION_ID
+  left join instp ip on ip.CONNECTION_ID=p.CONNECTION_ID and ip.CSP_ID=p.CSP_ID
 where dateadd(minute,330,p.f_ta)>='2026-08-01' and dateadd(minute,330,p.f_ta)<'2026-09-01'
   and p.f_ta <= dateadd(hour,-48,current_timestamp())
 group by 1
