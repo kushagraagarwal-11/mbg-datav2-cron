@@ -87,18 +87,19 @@ def table_of(label):
     if l.startswith("ALL"):          return "ALL"
     if l.startswith("MG ENROLLED") and "excl" in l.lower(): return "ENR_EXVIOL"
     if l.startswith("MG ENROLLED"):  return "ENROLLED"
-    if l.startswith("CONTROL") and "excl" in l.lower(): return "CTL_EXNOWORK"
+    if l.startswith("CONTROL") and "excl" in l.lower(): return "CTL_ANYLEAD"
     if "Sehat" in l:                 return "CTL_SEHAT"
     if "no MG" in l:                 return "CTL_NOMG"
     if l.startswith("CONTROL"):      return "CONTROL"
     return None
 
 
-def belongs(g, sub, table, viol=0, nowork=0):
+def belongs(g, sub, table, viol=0, nowork=0, has_aug=False):
     if table == "ALL":       return True
     if table == "ENROLLED":  return g == "ENROLLED"
     if table == "ENR_EXVIOL": return g == "ENROLLED" and not viol
-    if table == "CTL_EXNOWORK": return g == "CONTROL" and not nowork
+    # "excl no-work CSPs" is LIVE, not a frozen list: control CSPs with >=1 matured August lead
+    if table == "CTL_ANYLEAD": return g == "CONTROL" and has_aug
     if table == "CONTROL":   return g == "CONTROL"
     if table == "CTL_SEHAT": return g == "CONTROL" and sub == "SEHAT"
     if table == "CTL_NOMG":  return g == "CONTROL" and sub == "NOMG"
@@ -135,16 +136,23 @@ def main():
     print("aug matured pids:", len(aug),
           "tech", sum(v[0] for v in aug.values()), "inst", sum(v[1] for v in aug.values()), flush=True)
 
-    tables = ["ALL", "ENROLLED", "ENR_EXVIOL", "CONTROL", "CTL_EXNOWORK", "CTL_SEHAT", "CTL_NOMG"]
-    agg = {t: defaultdict(lambda: [0, 0, 0, 0]) for t in tables}  # cohort -> aug_tech, aug_inst, mjt, mji
+    tables = ["ALL", "ENROLLED", "ENR_EXVIOL", "CONTROL", "CTL_ANYLEAD", "CTL_SEHAT", "CTL_NOMG"]
+    LIVE_COHORT = "CTL_ANYLEAD"   # membership recomputed each run -> its A:K are rewritten too
+    # cohort -> aug_tech, aug_inst, mjt, mji, n_csps, base, jul_tech, jul_inst
+    agg = {t: defaultdict(lambda: [0] * 8) for t in tables}
+    members = {t: 0 for t in tables}
     for pid, rec in cfg.items():
         g, sub, coh, mjt, mji = rec[:5]
-        viol = rec[5] if len(rec) > 5 else 0
+        viol   = rec[5] if len(rec) > 5 else 0
         nowork = rec[6] if len(rec) > 6 else 0
+        base, jt, ji = (rec[7:10] + [0, 0, 0])[:3] if len(rec) > 7 else (0, 0, 0)
         at, ai = aug.get(pid, (0, 0))
         for t in tables:
-            if belongs(g, sub, t, viol, nowork):
-                x = agg[t][coh]; x[0] += at; x[1] += ai; x[2] += mjt; x[3] += mji
+            if belongs(g, sub, t, viol, nowork, at > 0):
+                x = agg[t][coh]
+                x[0] += at; x[1] += ai; x[2] += mjt; x[3] += mji
+                x[4] += 1; x[5] += base; x[6] += jt; x[7] += ji
+                members[t] += 1
 
     def cells(atech, ainst, mjt, mji):
         ap = round(100 * ainst / atech) if atech else None
@@ -172,21 +180,35 @@ def main():
         if cur_tbl is None or aug_start is None:
             continue
         if a in ("0", "0.5-4", "4.5-8", "8.5-12", "12.5-24", ">24"):
-            atech, ainst, mjt, mji = agg[cur_tbl].get(a, [0, 0, 0, 0])
-            vals = cells(atech, ainst, mjt, mji)
+            rec8 = agg[cur_tbl].get(a, [0] * 8)
         elif a == "Grand Total":
-            tot = [0, 0, 0, 0]
+            rec8 = [0] * 8
             for v in agg[cur_tbl].values():
-                for k in range(4): tot[k] += v[k]
-            vals = cells(*tot)
+                for k in range(8): rec8[k] += v[k]
         else:
             continue
+        atech, ainst, mjt, mji, ncsp, base, jt, ji = rec8
+        vals = cells(atech, ainst, mjt, mji)
         r1 = i + 1
+        if cur_tbl == LIVE_COHORT:
+            pct = lambda n, d: (str(round(100 * n / d)) + "%") if d else "-"
+            updates.append({"range": f"B{r1}:J{r1}", "values": [[
+                ncsp, base, mjt, mji, jt, ji,
+                round(base / ncsp) if ncsp else "", pct(mji, mjt), pct(ji, jt)]]})
         # write only tech/inst/% (L:N). Col O (Aug Δ vs MayJun %) and P (Base/CSP)
         # are live sheet formulas (=N/I-1, =ROUND(C/B)) — do NOT overwrite them.
         rng = f"{colletter(aug_start)}{r1}:{colletter(aug_start + 2)}{r1}"
         updates.append({"range": rng, "values": [vals[:3]]})
         wrote += 1
+
+    # live title for the recomputed-membership table
+    for i, row in enumerate(grid):
+        a = (row[0] if row else "").strip()
+        if table_of(a) == LIVE_COHORT:
+            updates.append({"range": f"A{i+1}", "values": [[
+                "CONTROL — not enrolled, excl no-work CSPs "
+                f"({members[LIVE_COHORT]} with >=1 matured Aug lead)"]]})
+            break
 
     # header timestamp
     now = datetime.datetime.now(IST)
