@@ -104,12 +104,26 @@ WITH agg AS (
   FROM PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.INSTALL_EXECUTION_CANDIDATES iec
   WHERE iec._FIVETRAN_ACTIVE AND iec.CSP_ID IN ({inlist})
   GROUP BY 1,2
+),
+mob AS (                              -- one mobile per connection (union of booking tables)
+  SELECT CONNECTION_ID, MAX(MOBILE) AS mobile FROM (
+    SELECT CONNECTION_ID, MOBILE FROM PROD_DB.DBT.TASKVANILLA       WHERE MOBILE IS NOT NULL
+    UNION ALL
+    SELECT CONNECTION_ID, MOBILE FROM PROD_DB.DBT.TASKVANILLA_AUDIT WHERE MOBILE IS NOT NULL
+  ) GROUP BY 1
+),
+lead AS (                             -- CURRENT-MONTH connections only, then dedup to one row per (lead=mobile, CSP)
+  SELECT COALESCE(m.mobile, a.CONNECTION_ID) AS lead_key, a.CSP_ID,
+    MAX(a.has_installed) AS has_installed, MAX(a.tech_assigned) AS tech_assigned
+  FROM agg a LEFT JOIN mob m ON m.CONNECTION_ID = a.CONNECTION_ID
+  WHERE a.last_date >= DATE_TRUNC('month', CURRENT_DATE)   -- filter at connection level BEFORE dedup
+  GROUP BY 1,2
 )
 SELECT CSP_ID,
-  SUM(IFF(has_installed=1 AND last_date >= DATE_TRUNC('month', CURRENT_DATE),1,0)) AS installs,
-  SUM(IFF(tech_assigned=1 AND last_date >= DATE_TRUNC('month', CURRENT_DATE),1,0)) AS denom,
-  SUM(IFF(last_date >= DATE_TRUNC('month', CURRENT_DATE),1,0)) AS total_leads
-FROM agg GROUP BY CSP_ID""")
+  SUM(has_installed) AS installs,
+  SUM(tech_assigned) AS denom,
+  COUNT(*)           AS total_leads
+FROM lead GROUP BY CSP_ID""")
     aug = {r[0]: (int(r[1] or 0), int(r[2] or 0), int(r[3] or 0)) for r in rows}
     print(f"IEC returned August data for {len(aug)} CSPs", flush=True)
 
