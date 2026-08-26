@@ -1,10 +1,8 @@
-name: Device Recovery Funnel (daily 21:00 IST)
+name: Device Recovery Funnel (daily 22:00 IST)
 
 on:
-  # PAUSED at the user's request after the 25-Aug post to #execution-leadership.
-  # Re-enable by uncommenting the schedule block.
-  # schedule:
-  #   - cron: '30 15 * * *'      # 21:00 IST
+  schedule:
+    - cron: '30 16 * * *'      # 22:00 IST
   workflow_dispatch:
 
 jobs:
