@@ -1,0 +1,27 @@
+name: MG Payout August (daily refresh)
+
+on:
+  schedule:
+    # 02:00 & 08:00 UTC = 07:30 & 13:30 IST. August is month-to-date, so installs/denom
+    # accrue through the month; idempotent full rewrite, so extra runs are harmless.
+    - cron: "0 2,8 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+
+      # Rebuilds "MG Payout (formula-integrated) - August": cohort + enrollment dates from the
+      # July tab, August installs/denom LIVE from IEC (month-to-date), ₹300/install + ₹10k floor
+      # prorated by August eligible days. Derived columns are live sheet formulas.
+      - name: MG Payout August → "MG Payout (formula-integrated) - August"
+        env:
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+        run: python mg_payout_august_refresh.py
