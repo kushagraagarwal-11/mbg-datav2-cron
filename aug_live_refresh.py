@@ -9,8 +9,8 @@ completed / step>=7. Only the LIVE August columns L:O are rewritten each run —
 May-Jun / July / cohorts / counts (cols A:K) are frozen baselines and untouched.
 
 Five tables share the same L:O columns and are refreshed together:
-  ALL (710) · MG ENROLLED (477) · CONTROL not-enrolled (233) ·
-  CONTROL Sehat-MG enrolled (72) · CONTROL no-MG (161).
+  ALL (710) · MG ENROLLED (477) · MG ENROLLED excl violation CSPs (461) ·
+  CONTROL not-enrolled (233) · CONTROL Sehat-MG enrolled (72) · CONTROL no-MG (161).
 Partition (group / Sehat-subgroup / re-derived cohort / May-Jun baseline) is
 frozen in mgrate_aug_config.json so the split always matches the pasted baseline.
 
@@ -81,6 +81,7 @@ def creds():
 def table_of(label):
     l = (label or "").strip()
     if l.startswith("ALL"):          return "ALL"
+    if l.startswith("MG ENROLLED") and "excl" in l.lower(): return "ENR_EXVIOL"
     if l.startswith("MG ENROLLED"):  return "ENROLLED"
     if "Sehat" in l:                 return "CTL_SEHAT"
     if "no MG" in l:                 return "CTL_NOMG"
@@ -88,9 +89,10 @@ def table_of(label):
     return None
 
 
-def belongs(g, sub, table):
+def belongs(g, sub, table, viol=0):
     if table == "ALL":       return True
     if table == "ENROLLED":  return g == "ENROLLED"
+    if table == "ENR_EXVIOL": return g == "ENROLLED" and not viol
     if table == "CONTROL":   return g == "CONTROL"
     if table == "CTL_SEHAT": return g == "CONTROL" and sub == "SEHAT"
     if table == "CTL_NOMG":  return g == "CONTROL" and sub == "NOMG"
@@ -127,12 +129,14 @@ def main():
     print("aug matured pids:", len(aug),
           "tech", sum(v[0] for v in aug.values()), "inst", sum(v[1] for v in aug.values()), flush=True)
 
-    tables = ["ALL", "ENROLLED", "CONTROL", "CTL_SEHAT", "CTL_NOMG"]
+    tables = ["ALL", "ENROLLED", "ENR_EXVIOL", "CONTROL", "CTL_SEHAT", "CTL_NOMG"]
     agg = {t: defaultdict(lambda: [0, 0, 0, 0]) for t in tables}  # cohort -> aug_tech, aug_inst, mjt, mji
-    for pid, (g, sub, coh, mjt, mji) in cfg.items():
+    for pid, rec in cfg.items():
+        g, sub, coh, mjt, mji = rec[:5]
+        viol = rec[5] if len(rec) > 5 else 0
         at, ai = aug.get(pid, (0, 0))
         for t in tables:
-            if belongs(g, sub, t):
+            if belongs(g, sub, t, viol):
                 x = agg[t][coh]; x[0] += at; x[1] += ai; x[2] += mjt; x[3] += mji
 
     def cells(atech, ainst, mjt, mji):
