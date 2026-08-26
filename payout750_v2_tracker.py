@@ -33,6 +33,11 @@ CSPS = ["a0a7g1","a0b7h5","a0b5q7","a0b6c6","a0a7a3","a0a7e3","a0a7a6","a0a7a5",
         "a0b8y0","a0b5m3","a0b9b9","a0b9g8","a0b8s3","a0b6d8","a0c0f1","a0b9h5","a0b9g7","a0b8s0",
         "a0c0a5","a0b8r2"]
 
+# the 16 that ABANDONED V2 (viewed, no decision) and are being re-pitched via the
+# "750 opt in Flow 1 Positive - abandoned" campaign — tracked as a second summary block.
+ABANDONED16 = {"a0a6y9","a0a7e3","a0a7g0","a0a7g6","a0a7h0","a0b5n2","a0b5q7","a0b5w4","a0b6d8",
+               "a0b6x8","a0b8y0","a0b8z7","a0b9b9","a0b9v6","a0b9x8","a0c0a5"}
+
 
 def mb(sql):
     body = json.dumps({"database": 113, "type": "native", "native": {"query": sql}}).encode()
@@ -146,12 +151,26 @@ def main():
         ["Deciders (opted + declined)", deciders, ""],
         ["Opt-in rate among deciders", f"{round(100*nopt/deciders)}%" if deciders else "-", ""],
     ]
+    # second block — the 16 abandoned CSPs re-pitched via the "abandoned" campaign
+    ab_opt = len(opted & ABANDONED16); ab_dec = len(declined & ABANDONED16)
+    ab_still = len(ABANDONED16) - ab_opt - ab_dec
+    def pab(x): return f"{round(100*x/len(ABANDONED16))}%" if ABANDONED16 else "-"
+    summ += [
+        [],
+        [f"ABANDONED RE-PITCH — {len(ABANDONED16)} CSPs (viewed V2, no decision) shown again", "count", "% of 16"],
+        ["Opted in (converted)", ab_opt, pab(ab_opt)],
+        ["Declined (now decided)", ab_dec, pab(ab_dec)],
+        ["Still abandoned (no decision yet)", ab_still, pab(ab_still)],
+    ]
     try: ws = ss.worksheet(SUM_TAB); ws.clear()
     except gspread.WorksheetNotFound: ws = ss.add_worksheet(SUM_TAB, rows=30, cols=4)
     ws.update(values=summ, range_name="A1", value_input_option="RAW")
     ws.format("A1:D1", {"textFormat": {"bold": True, "fontSize": 10}, "wrapStrategy": "WRAP"})
-    ws.format("A3:C3", {"textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}}, "backgroundColor": {"red": .85, "green": 0, "blue": .55}})
+    pink = {"textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}}, "backgroundColor": {"red": .85, "green": 0, "blue": .55}}
+    ws.format("A3:C3", pink)
     ws.format("A8:C8", {"textFormat": {"bold": True}})
+    ab_hdr = next((i for i, r in enumerate(summ) if r and str(r[0]).startswith("ABANDONED RE-PITCH")), None)
+    if ab_hdr is not None: ws.format(f"A{ab_hdr+1}:C{ab_hdr+1}", pink)
 
     # ---------- CSP Status (V2) ----------
     def row(c, status, viewed_at, decided_at, decision):
