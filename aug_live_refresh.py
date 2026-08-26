@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """MG install-rate — daily refresh of the AUGUST columns (L:O) in tab
-'MG rate (MayJun ASSIGNED, Jul IEC)' of the MG install-rate sheet.
+'MG Rate Summary | Aug' (gid 1675005689) of the MG install-rate sheet.
 
 August is anchored the same way as July: a lead counts in August if it reached
 TECHNICIAN_ASSIGNED in August (clean distinct-connection count), AND is MATURED
@@ -24,7 +24,9 @@ from collections import defaultdict
 
 MB_KEY   = os.environ.get("MB_KEY") or os.environ.get("METABASE_KEY")
 SHEET_ID = os.environ.get("MGRATE_SHEET_ID", "1_Zg7VkQ7RTZ-9pDJjrI1OvfGe3-1NhTqJyu71OT-Z7c")
-TAB      = "MG rate (MayJun ASSIGNED, Jul IEC)"
+TAB      = "MG Rate Summary | Aug"          # current title (renamed 17-Aug-2026)
+TAB_GID  = int(os.environ.get("MGRATE_TAB_GID", "1675005689"))  # gid survives renames
+TAB_ALT  = ["MG rate (MayJun ASSIGNED, Jul IEC)"]  # historical titles
 IST      = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
 HERE     = os.path.dirname(os.path.abspath(__file__))
 
@@ -102,6 +104,22 @@ def colletter(i):  # 0-based -> A1 letter
     return s
 
 
+def open_tab(sh):
+    """Find the summary tab by gid first (survives renames), then by title."""
+    try:
+        return sh.get_worksheet_by_id(TAB_GID)
+    except Exception:
+        pass
+    titles = {w.title: w for w in sh.worksheets()}
+    for t in [TAB] + TAB_ALT:
+        if t in titles:
+            return titles[t]
+    for t, w in titles.items():
+        if "MG rate" in t or "MG Rate" in t:
+            return w
+    raise SystemExit("MG rate summary tab not found in sheet " + SHEET_ID)
+
+
 def main():
     cfg = json.load(open(os.path.join(HERE, "mgrate_aug_config.json"), encoding="utf-8"))
     rows = mb(AUG_SQL)
@@ -128,7 +146,7 @@ def main():
         return [atech, ainst, pct, delta]
 
     gc = gspread.authorize(creds())
-    ws = gc.open_by_key(SHEET_ID).worksheet(TAB)
+    ws = open_tab(gc.open_by_key(SHEET_ID))
     grid = ws.get_all_values()
 
     updates = []; cur_tbl = None; aug_start = None; wrote = 0
