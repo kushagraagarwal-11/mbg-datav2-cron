@@ -3,9 +3,12 @@
 'MG Rate Summary | Aug' (gid 1675005689) of the MG install-rate sheet.
 
 August is anchored the same way as July: a lead counts in August if it reached
-TECHNICIAN_ASSIGNED in August (clean distinct-connection count), AND is MATURED
+TECHNICIAN_ASSIGNED in August, AND is MATURED
 (>=48h since assignment, so it had a fair window to install). install = OTP /
-completed / step>=7. Only the LIVE August columns L:O are rewritten each run —
+completed / step>=7. PAIR GRAIN (matches the July + May-Jun baselines): a lead that was
+technician-assigned to two CSPs counts once for EACH of them; the install is credited to the
+CSP that finally holds the lead, so the other CSP's row is a miss. (Verified: recomputing July
+on this basis reproduces the frozen baseline -- 3127/1662 vs 3145/1670, 53.1% both.) Only the LIVE August columns L:O are rewritten each run —
 May-Jun / July / cohorts / counts (cols A:K) are frozen baselines and untouched.
 
 Five tables share the same L:O columns and are refreshed together:
@@ -31,22 +34,24 @@ IST      = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
 HERE     = os.path.dirname(os.path.abspath(__file__))
 
 AUG_SQL = """
-with ta as (select CONNECTION_ID, min(UPDATED_AT) ta_at
-   from PROD_DB.DBT_CSP.TAS_INSTALL_EXECUTION_CANDIDATES
-   where CURRENT_STATE='TECHNICIAN_ASSIGNED' group by 1),
-tas as (select CONNECTION_ID,
-    max(iff(OTP_VERIFIED=TRUE OR INSTALLATION_COMPLETED_AT is not null OR COMPLETED_STEP>=7,1,0)) inst
-  from PROD_DB.DBT_CSP.TAS_INSTALL_EXECUTION_CANDIDATES where ETL_CURRENT=TRUE group by 1),
-tl as (select CONNECTION_ID,CSP_ID from PROD_DB.DBT_CSP.TAS_INSTALL_EXECUTION_CANDIDATES where ETL_CURRENT=TRUE
+with src as (select * from PROD_DB.DBT_CSP.TAS_INSTALL_EXECUTION_CANDIDATES),
+pair as (   -- PAIR GRAIN: one row per (lead, CSP) that ever had it technician-assigned
+  select CONNECTION_ID, CSP_ID, min(UPDATED_AT) f_ta from src
+  where CURRENT_STATE='TECHNICIAN_ASSIGNED' group by 1,2),
+inst as (select CONNECTION_ID,
+    max(iff(OTP_VERIFIED=TRUE OR INSTALLATION_COMPLETED_AT is not null OR COMPLETED_STEP>=7,1,0)) i
+  from src where ETL_CURRENT=TRUE group by 1),
+lastr as (select CONNECTION_ID, CSP_ID lc from src where ETL_CURRENT=TRUE
   qualify row_number() over(partition by CONNECTION_ID order by UPDATED_AT desc)=1),
-csp as (select CSP_ID,PARTNER_ID::string pid from PROD_DB.CSP_GATEWAY_SERVICE_CSP_GATEWAY_SERVICE.CSP_ACCOUNT
+csp as (select CSP_ID, PARTNER_ID::string pid from PROD_DB.CSP_GATEWAY_SERVICE_CSP_GATEWAY_SERVICE.CSP_ACCOUNT
   where _fivetran_active=TRUE qualify row_number() over(partition by CSP_ID order by 1)=1)
-select csp.pid, count(distinct ta.CONNECTION_ID) tech, sum(coalesce(tas.inst,0)) inst
-from ta join tl on tl.CONNECTION_ID=ta.CONNECTION_ID
-  left join tas on tas.CONNECTION_ID=ta.CONNECTION_ID
-  left join csp on csp.CSP_ID=tl.CSP_ID
-where dateadd(minute,330,ta.ta_at)>='2026-08-01' and dateadd(minute,330,ta.ta_at)<'2026-09-01'
-  and ta.ta_at <= dateadd(hour,-48,current_timestamp())
+select c.pid, count(*) tech,
+       sum(iff(p.CSP_ID=l.lc, coalesce(i.i,0), 0)) inst   -- install credited to the CSP that finally holds the lead
+from pair p join csp c on c.CSP_ID=p.CSP_ID
+  left join inst i on i.CONNECTION_ID=p.CONNECTION_ID
+  left join lastr l on l.CONNECTION_ID=p.CONNECTION_ID
+where dateadd(minute,330,p.f_ta)>='2026-08-01' and dateadd(minute,330,p.f_ta)<'2026-09-01'
+  and p.f_ta <= dateadd(hour,-48,current_timestamp())
 group by 1
 """
 
