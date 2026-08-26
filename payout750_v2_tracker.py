@@ -24,6 +24,9 @@ MB_KEY = os.environ.get("METABASE_KEY", "mb_1dsbxsJfyROPsVyNpifJ8hTTlIDG85+qNKRo
 SHEET_ID = "1ap0K6GB6RijeLHRWPf9N84U0cl1XEJs67DSQBql7sGQ"
 DESIGN_SHEET_ID = "1SfWil0SaN1lKPTqtTF86edoPk8lT1BxzNzB6vC0_4Yc"
 CAMP = "1787720389"; START = "20260826102900"; START_TS = "2026-08-26 10:29:00"
+# abandoned re-pitch ("750 opt in Flow 1 Positive - abandoned") go-live — a view at/after this
+# by one of the 16 = they saw the banner AGAIN.
+REPITCH_FROM = os.environ.get("P750_REPITCH_FROM", "20260826141500")
 IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
 SUM_TAB = "Summary (V2)"; CSP_TAB = "CSP Status (V2)"
 
@@ -79,6 +82,16 @@ def ev_ts(ev, ch=None):
 def fmt(ts):
     try: return datetime.datetime.strptime(ts, "%Y%m%d%H%M%S").strftime("%d-%b %H:%M")
     except Exception: return ""
+
+
+def viewed_since(cutoff, scope):
+    """cspids in `scope` that fired Payout750_Viewed at/after `cutoff`."""
+    s = set()
+    for r in export("Payout750_Viewed"):
+        if str(r.get("ts", "")) < cutoff: continue
+        c = (r.get("profile", {}).get("profileData", {}) or {}).get("cspid", "")
+        if c in scope: s.add(c)
+    return s
 
 
 def creds():
@@ -154,10 +167,12 @@ def main():
     # second block — the 16 abandoned CSPs re-pitched via the "abandoned" campaign
     ab_opt = len(opted & ABANDONED16); ab_dec = len(declined & ABANDONED16)
     ab_still = len(ABANDONED16) - ab_opt - ab_dec
+    ab_reviewed = len(viewed_since(REPITCH_FROM, ABANDONED16))
     def pab(x): return f"{round(100*x/len(ABANDONED16))}%" if ABANDONED16 else "-"
     summ += [
         [],
         [f"ABANDONED RE-PITCH — {len(ABANDONED16)} CSPs (viewed V2, no decision) shown again", "count", "% of 16"],
+        ["Viewed the re-pitch (again)", ab_reviewed, pab(ab_reviewed)],
         ["Opted in (converted)", ab_opt, pab(ab_opt)],
         ["Declined (now decided)", ab_dec, pab(ab_dec)],
         ["Still abandoned (no decision yet)", ab_still, pab(ab_still)],
