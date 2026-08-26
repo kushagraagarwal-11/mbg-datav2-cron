@@ -73,3 +73,11 @@ jobs:
           CT_PASS: ${{ secrets.CT_PASS }}
           GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
         run: python payout750_push.py
+
+      # 6) V2 campaign ("750 opt in Flow 1 Positive - V2", 1787720389, live 26-Aug 10:29) —
+      #    Opted/Declined/Abandoned/Not-viewed for its 42 CSPs → "Summary (V2)" + "CSP Status (V2)".
+      - name: V2 tracker → "Summary (V2)" + "CSP Status (V2)"
+        env:
+          CT_PASS: ${{ secrets.CT_PASS }}
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+        run: python payout750_v2_tracker.py
