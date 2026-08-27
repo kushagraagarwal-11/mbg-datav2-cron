@@ -1,0 +1,25 @@
+name: Payout750 27-Aug tracker (hourly)
+
+on:
+  schedule:
+    # top of every hour. Campaign goes live 27-Aug 10:30 IST; before that all 92 read not-viewed.
+    - cron: "0 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  track:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+
+      # 27-Aug 750 campaign (92 CSPs, live 10:30) -> "Summary (27-Aug)" + "CSP Status (27-Aug)".
+      - name: 27-Aug tracker → Summary + CSP Status
+        env:
+          CT_PASS: ${{ secrets.CT_PASS }}
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+        run: python payout750_aug27_tracker.py
