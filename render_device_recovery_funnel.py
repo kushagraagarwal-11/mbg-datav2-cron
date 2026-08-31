@@ -314,15 +314,21 @@ def draw(cty, d, stamp, ncsp):
             fontsize=10.5, color=WARN_FG, fontweight="bold", zorder=3)
     ax.text(73, 25.9, "{:,}".format(d["tracker_out"]), ha="center",
             fontsize=18, color=INK, fontweight="bold", zorder=3)
-    ax.text(73, 23.4, "%s not received (all branches)   +   %s no return marked" % (
-                "{:,}".format(d["trk_cf_out"] + d["trk_marked_out"] + d["trk_other_out"]),
-                "{:,}".format(d["trk_cf_idle"])),
-            ha="center", fontsize=8.5, color=WARN_FG, zorder=3)
+    # Every component spelled out, so the total can be checked against the boxes above.
+    # trk_other_out has no box of its own: custodied / free-window / outside-cohort
+    # devices that have since gone to retrieval.
+    ax.text(73, 23.4, "%s no return marked  +  %s not received  +  %s pre-16-Aug  +  %s other" % (
+                "{:,}".format(d["trk_cf_idle"]), "{:,}".format(d["trk_cf_out"]),
+                "{:,}".format(d["trk_marked_out"]), "{:,}".format(d["trk_other_out"])),
+            ha="center", fontsize=8, color=WARN_FG, zorder=3)
     # Start each arrow at its box's right edge so neither cuts back across the tree.
     arrow = dict(arrowstyle="-|>", color=WARN_FG, lw=1.7, shrinkA=1, shrinkB=3,
                  connectionstyle="arc3,rad=-0.16")
     ax.annotate("", xy=(60, 30.9), xytext=(35, 54.4), arrowprops=arrow)     # No return marked
     ax.annotate("", xy=(55.5, 27.6), xytext=(26.2, 38.4), arrowprops=arrow)   # NOT received
+    # the pre-16-Aug branch feeds the total as well, so give it its own arrow
+    ax.annotate("", xy=(80, 30.9), xytext=(78.5, 34.3),
+                arrowprops=dict(arrowstyle="-|>", color=WARN_FG, lw=1.7, shrinkA=1, shrinkB=3))
     ax.text(50, 18.5, "Source: NETBOX_CUSTODY (SCD2 point-in-time) · 'Received at WH' = status RETURNED · "
                       "'on tracker' = also listed on the Charged & Pending Devices New tab",
             ha="center", fontsize=8.5, color=MUTED)
