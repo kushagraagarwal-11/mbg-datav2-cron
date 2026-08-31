@@ -28,7 +28,10 @@ WARN_BG, WARN_FG = "#fdefe1", "#a85b12"    # still out
 
 SHEET = "1VNhP2DNwnF73UiRoO_E-HtkNwCtETr8ZVzHcpKINBfs"
 CITY_TABS = [(232007919, "Delhi", 0), (1220846429, "Mumbai", 1), (124782724, "Bharat", 1)]
-CUTOFF = "2026-08-16 23:59:59"             # end of go-live day
+CUTOFF = "2026-08-16 23:59:59"             # end of go-live day.
+# NOT the start of 16-Aug: carry fee only switches on at ~03:30, so a 00:00 snapshot
+# leaves the "Carry fee APPLIED" bucket empty. Instead the retrieval-pending devices are
+# split by WHEN they were marked, so "Already marked return" really is pre-16-Aug.
 NETBOX = "PROD_DB.CSP_ASSET_CUSTODY_SERVICE_CSP_ASSET_CUSTODY_SERVICE.NETBOX_CUSTODY"
 IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
 
@@ -92,9 +95,12 @@ def fetch(city):
     rows = mb("""
 WITH snap16 AS (
   SELECT n.DEVICE_ID, %(case)s AS city,
-    CASE WHEN n.CARRY_FEE_ACTIVE = TRUE    THEN 'CF'
-         WHEN n.STATUS='IDLE'              THEN 'FREE'
-         WHEN n.STATUS='RETRIEVAL_PENDING' THEN 'MARKED'
+    CASE WHEN n.CARRY_FEE_ACTIVE = TRUE THEN 'CF'
+         WHEN n.STATUS='IDLE'           THEN 'FREE'
+         WHEN n.STATUS='RETRIEVAL_PENDING'
+              AND (n.RETRIEVAL_START_DATE IS NULL
+                   OR DATE(n.RETRIEVAL_START_DATE) < '2026-08-16') THEN 'MARKED'
+         WHEN n.STATUS='RETRIEVAL_PENDING' THEN 'MARK16'
          ELSE 'CUST' END AS b16          -- CUSTODIED + PENDING_CSP_RECEIPT
   FROM %(nb)s n
   WHERE n._FIVETRAN_START <= '%(cut)s' AND n._FIVETRAN_END > '%(cut)s'
@@ -178,6 +184,7 @@ def numbers(T, K, extra, cty):
         "cf_idle": g("CF", ["CF_ACTIVE", "IDLE"]),
         "cf_other": cf - g("CF", ["RETURNED", "RETRIEVAL_PENDING", "CF_ACTIVE", "IDLE"]),
         "free": tot("FREE"), "marked": tot("MARKED"), "cust": tot("CUST"),
+        "mark16": tot("MARK16"),
         "marked_wh": g("MARKED", ["RETURNED"]),
         "cust_wh": g("CUST", ["RETURNED"]),
         "free_wh": g("FREE", ["RETURNED"]),
@@ -187,7 +194,7 @@ def numbers(T, K, extra, cty):
         "trk_other_out": extra[cty]["other"],
     }
     d["tracker_out"] = extra[cty]["total"]
-    d["ncf"] = tot("FREE") + tot("MARKED") + tot("CUST")
+    d["ncf"] = tot("FREE") + tot("MARKED") + tot("MARK16") + tot("CUST")
 
     # "NOT received" reports every still-out retrieval-pending device on the tracker,
     # across all four 16-Aug branches. Per the user, the parents are then recomputed
@@ -278,22 +285,23 @@ def draw(cty, d, stamp, ncsp):
         elbow(ax, 13, 51.5, x, 41.7)
 
     # ---- non-carry-fee branch: why no fee, and where they are now ----
-    for x, t, v in ((60, "Idle, in free\nwindow", d["free"]),
-                    (76, "Already marked\nreturn (pre-16 Aug)", d["marked"]),
+    for x, t, v in ((56, "Idle, in free\nwindow", d["free"]),
+                    (68, "Already marked return\n(BEFORE 16 Aug)", d["marked"]),
+                    (80, "Marked for return\nON 16 Aug", d["mark16"]),
                     (92, "Custodied", d["cust"])):
-        box(ax, x, 55, 13.5, 7.4, t, v, sub=pct(v, d["ncf"]))
+        box(ax, x, 55, 11.2, 7.4, t, v, sub=pct(v, d["ncf"]), title_size=8.3)
         elbow(ax, 76, 67.2, x, 58.7)
 
     # Third leaf so the branch still sums: "NOT received" now means retrieval-pending ONLY,
     # which leaves the devices that went custodied / redeployed / lost without a home.
-    for x, t, v, bg, fg in ((67, "Received at WH", d["marked_wh"], GOOD_BG, GOOD_FG),
-                            (78.5, "NOT received", d["marked_out"], WARN_BG, WARN_FG),
-                            (90, "Custodied /\nredeployed / lost", d["marked_other"], "white", BAR_COLOR)):
+    for x, t, v, bg, fg in ((58, "Received at WH", d["marked_wh"], GOOD_BG, GOOD_FG),
+                            (69.5, "NOT received", d["marked_out"], WARN_BG, WARN_FG),
+                            (81, "Custodied /\nredeployed / lost", d["marked_other"], "white", BAR_COLOR)):
         sub = ("%s on tracker" % "{:,}".format(d["trk_marked_out"])) if t.startswith("NOT") \
             else pct(v, d["marked"])
         box(ax, x, 38, 11, 7.4, t, v, sub=sub, fill=bg, edge=fg,
             fg=fg if bg != "white" else INK, title_size=8.5)
-        elbow(ax, 76, 51.5, x, 41.7)
+        elbow(ax, 68, 51.5, x, 41.7)
 
     # ---- footer: the one number that matters ----
     rec = d["cf_wh"] + d["marked_wh"] + d["cust_wh"] + d["free_wh"]
@@ -327,7 +335,7 @@ def draw(cty, d, stamp, ncsp):
     ax.annotate("", xy=(60, 30.9), xytext=(35, 54.4), arrowprops=arrow)     # No return marked
     ax.annotate("", xy=(55.5, 27.6), xytext=(26.2, 38.4), arrowprops=arrow)   # NOT received
     # the pre-16-Aug branch feeds the total as well, so give it its own arrow
-    ax.annotate("", xy=(80, 30.9), xytext=(78.5, 34.3),
+    ax.annotate("", xy=(72, 30.9), xytext=(69.5, 34.3),
                 arrowprops=dict(arrowstyle="-|>", color=WARN_FG, lw=1.7, shrinkA=1, shrinkB=3))
     ax.text(50, 18.5, "Source: NETBOX_CUSTODY (SCD2 point-in-time) · 'Received at WH' = status RETURNED · "
                       "'on tracker' = also listed on the Charged & Pending Devices New tab",
