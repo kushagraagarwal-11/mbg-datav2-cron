@@ -195,11 +195,15 @@ def numbers(T, K, extra, cty):
     #   NOTE: 172-odd of those devices are also drawn in the right-hand branch's own
     #   "NOT received" box, so they are counted twice and these parents run above the
     #   true cohort (Delhi 16,890 vs an actual 16,718).
-    d["not_recv"] = d["trk_cf_out"] + d["trk_marked_out"] + d["trk_other_out"]
-    d["cf_ret"] = d["cf_wh"] + d["not_recv"]
-    d["cf"] = d["cf_ret"] + d["cf_idle"] + d["cf_other"]
-    d["total"] = d["cf"] + d["ncf"]
-    d["marked_out"] = d["marked"] - d["marked_wh"]
+    # Branch-only: the right-hand branch has its own "NOT received" box, so counting
+    # every branch here would double-count those devices. Parents therefore come straight
+    # from the 16-Aug snapshot and the header is the true, fixed cohort again.
+    d["not_recv"] = d["cf_out"]
+    d["cf_ret"] = d["cf_wh"] + d["cf_out"]
+    d["cf"] = cf
+    d["total"] = sum(v for k, v in T.items() if k[0] == cty)
+    d["marked_out"] = g("MARKED", ["RETRIEVAL_PENDING"])
+    d["marked_other"] = d["marked"] - d["marked_wh"] - d["marked_out"]
     return d
 
 
@@ -269,7 +273,7 @@ def draw(cty, d, stamp, ncsp):
 
     for x, t, v, bg, fg in ((7.5, "Received at WH", d["cf_wh"], GOOD_BG, GOOD_FG),
                             (20, "NOT received", d["not_recv"], WARN_BG, WARN_FG)):
-        sub = "on tracker · all branches" if t.startswith("NOT") else pct(v, d["cf_ret"])
+        sub = ("%s on tracker" % "{:,}".format(d["trk_cf_out"])) if t.startswith("NOT")             else pct(v, d["cf_ret"])
         box(ax, x, 38, 11.5, 7.4, t, v, sub=sub, fill=bg, edge=fg, fg=fg)
         elbow(ax, 13, 51.5, x, 41.7)
 
@@ -280,11 +284,15 @@ def draw(cty, d, stamp, ncsp):
         box(ax, x, 55, 13.5, 7.4, t, v, sub=pct(v, d["ncf"]))
         elbow(ax, 76, 67.2, x, 58.7)
 
-    for x, t, v, bg, fg in ((70, "Received at WH", d["marked_wh"], GOOD_BG, GOOD_FG),
-                            (82, "NOT received", d["marked_out"], WARN_BG, WARN_FG)):
+    # Third leaf so the branch still sums: "NOT received" now means retrieval-pending ONLY,
+    # which leaves the devices that went custodied / redeployed / lost without a home.
+    for x, t, v, bg, fg in ((67, "Received at WH", d["marked_wh"], GOOD_BG, GOOD_FG),
+                            (78.5, "NOT received", d["marked_out"], WARN_BG, WARN_FG),
+                            (90, "Custodied /\nredeployed / lost", d["marked_other"], "white", BAR_COLOR)):
         sub = ("%s on tracker" % "{:,}".format(d["trk_marked_out"])) if t.startswith("NOT") \
             else pct(v, d["marked"])
-        box(ax, x, 38, 11.5, 7.4, t, v, sub=sub, fill=bg, edge=fg, fg=fg)
+        box(ax, x, 38, 11, 7.4, t, v, sub=sub, fill=bg, edge=fg,
+            fg=fg if bg != "white" else INK, title_size=8.5)
         elbow(ax, 76, 51.5, x, 41.7)
 
     # ---- footer: the one number that matters ----
@@ -306,8 +314,9 @@ def draw(cty, d, stamp, ncsp):
             fontsize=10.5, color=WARN_FG, fontweight="bold", zorder=3)
     ax.text(73, 25.9, "{:,}".format(d["tracker_out"]), ha="center",
             fontsize=18, color=INK, fontweight="bold", zorder=3)
-    ax.text(73, 23.4, "%s not received   +   %s no return marked" % (
-                "{:,}".format(d["not_recv"]), "{:,}".format(d["trk_cf_idle"])),
+    ax.text(73, 23.4, "%s not received (all branches)   +   %s no return marked" % (
+                "{:,}".format(d["trk_cf_out"] + d["trk_marked_out"] + d["trk_other_out"]),
+                "{:,}".format(d["trk_cf_idle"])),
             ha="center", fontsize=8.5, color=WARN_FG, zorder=3)
     # Start each arrow at its box's right edge so neither cuts back across the tree.
     arrow = dict(arrowstyle="-|>", color=WARN_FG, lw=1.7, shrinkA=1, shrinkB=3,
