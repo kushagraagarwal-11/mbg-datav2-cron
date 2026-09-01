@@ -1,0 +1,25 @@
+name: Payout750 V4 tracker (hourly)
+
+on:
+  schedule:
+    # top of every hour. V4 Flow-1 wave (campaign 1787766976, 260 CSPs, published 02-Sep).
+    - cron: "0 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  track:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+
+      # V4 Flow-1 wave -> "Summary (V4)" + "CSP Status (V4)" (viewed / not-viewed / opted / declined).
+      - name: V4 tracker → Summary + CSP Status
+        env:
+          CT_PASS: ${{ secrets.CT_PASS }}
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+        run: python payout750_v4_tracker.py
