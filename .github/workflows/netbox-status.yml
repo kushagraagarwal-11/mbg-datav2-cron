@@ -40,3 +40,11 @@ jobs:
           GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
           MB_KEY: ${{ secrets.MB_KEY }}
         run: python noncons_returned_sync.py
+
+      # Independent of the steps above, and a full rewrite, so it runs regardless.
+      - name: Rebuild Ret Pending tabs (CSP summary + Device level)
+        if: always()
+        env:
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+          MB_KEY: ${{ secrets.MB_KEY }}
+        run: python ret_pending_tabs.py
