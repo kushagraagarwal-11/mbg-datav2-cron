@@ -1,0 +1,25 @@
+name: MG Removals + Updated Lists (refresh)
+
+on:
+  schedule:
+    # 02:00 & 08:00 UTC = 07:30 & 13:30 IST. Rebuilds the 6-list tab from the "Remove from MG"
+    # tab + current enrolled cohorts. (Removal source itself is refreshed from the OAuth-gated
+    # hub manually until its mirror sheet is shared with the SA.)
+    - cron: "0 2,8 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+
+      - name: Rebuild "MG Removals + Updated Lists"
+        env:
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+        run: python mg_removals_lists_refresh.py
