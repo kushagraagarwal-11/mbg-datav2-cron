@@ -32,3 +32,11 @@ jobs:
           GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
           MB_KEY: ${{ secrets.MB_KEY }}
         run: python carry_fee_csps_tab.py
+
+      # Independent of the two above, and idempotent, so it runs regardless.
+      - name: Refresh col L (non consented not returned - raw)
+        if: always()
+        env:
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+          MB_KEY: ${{ secrets.MB_KEY }}
+        run: python noncons_returned_sync.py
