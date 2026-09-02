@@ -2,9 +2,9 @@ name: MG Removals + Updated Lists (refresh)
 
 on:
   schedule:
-    # 02:00 & 08:00 UTC = 07:30 & 13:30 IST. Rebuilds the 6-list tab from the "Remove from MG"
-    # tab + current enrolled cohorts. (Removal source itself is refreshed from the OAuth-gated
-    # hub manually until its mirror sheet is shared with the SA.)
+    # 02:00 & 08:00 UTC = 07:30 & 13:30 IST. Now FULLY headless: reads the Enforcement Hub
+    # mirror sheet (shared with the SA) -> rebuilds "Remove from MG (<date>)" + the 6-list tab
+    # + (enrolled minus removals). No hub login needed.
     - cron: "0 2,8 * * *"
   workflow_dispatch: {}
 
@@ -19,7 +19,7 @@ jobs:
           python-version: "3.11"
       - run: pip install -r requirements.txt
 
-      - name: Rebuild "MG Removals + Updated Lists"
+      - name: Refresh MG removals from Enforcement Hub mirror
         env:
           GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
-        run: python mg_removals_lists_refresh.py
+        run: python mg_removal_from_mirror.py
