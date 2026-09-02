@@ -23,6 +23,10 @@ MB_KEY = os.environ.get("METABASE_KEY", "mb_1dsbxsJfyROPsVyNpifJ8hTTlIDG85+qNKRo
 SHEET_ID = "1XHqjybQYKyfCpgdraPiL32GBm2R2wf-CguxlHalmu8M"
 TRACKER_TAB = "MG Tracker CSP"                          # enrolled cohort + enrollment dates
 AUG_TAB = "MG Payout (formula-integrated) - August"
+# August is now closed (month rolled to Sept), so use a FIXED August window — NOT DATE_TRUNC(current)
+# which would score September. Env-overridable if a future month reuses this script.
+MONTH_START = os.environ.get("MG_MONTH_START", "2026-08-01")
+MONTH_END   = os.environ.get("MG_MONTH_END", "2026-09-01")
 IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
 
@@ -116,7 +120,7 @@ lead AS (                             -- CURRENT-MONTH connections only, then de
   SELECT COALESCE(m.mobile, a.CONNECTION_ID) AS lead_key, a.CSP_ID,
     MAX(a.has_installed) AS has_installed, MAX(a.tech_assigned) AS tech_assigned
   FROM agg a LEFT JOIN mob m ON m.CONNECTION_ID = a.CONNECTION_ID
-  WHERE a.last_date >= DATE_TRUNC('month', CURRENT_DATE)   -- filter at connection level BEFORE dedup
+  WHERE a.last_date >= '{MONTH_START}' AND a.last_date < '{MONTH_END}'   -- fixed August window (month closed)
   GROUP BY 1,2
 )
 SELECT CSP_ID,
@@ -128,7 +132,7 @@ FROM lead GROUP BY CSP_ID""")
     print(f"IEC returned August data for {len(aug)} CSPs", flush=True)
 
     # 3) build rows (data starts at sheet row 3)
-    banner = [f"MG Payout — FORMULA-INTEGRATED — AUGUST (month-to-date, live from IEC) · enrolled cohort ({len(cohort)}) "
+    banner = [f"MG Payout — FORMULA-INTEGRATED — AUGUST (FINAL, {MONTH_START}..{MONTH_END}, from IEC) · enrolled cohort ({len(cohort)}) "
               f"from MG Tracker CSP, minus {excl} disintermediation MG-removals · per-install rate ₹300 for all · "
               "≥60% gate · ≤2 leads = min guarantee · MG floor ₹10,000 prorated by August eligible days · "
               f"updated {datetime.datetime.now(IST):%d-%b %H:%M IST}"] + [""] * 17
