@@ -27,7 +27,13 @@ if not MB_KEY:
 DB_ID = 113
 
 SHEET_ID = "1HB79kOjNIeHJXPlDET4ksE3QiUvPi6MfG6i5RSw-gm4"
-TAB_NAME = "Calling Sheet"
+TAB_NAME = "Calling Sheet"   # default; re-bound at runtime from TAB_GID
+# Bind the calling tab by GID, not by name. On 2026-09-02 the tab was renamed
+# 'Calling Sheet' -> 'calling'; sh.worksheet(TAB_NAME) then raised
+# WorksheetNotFound and push_to_sheet happily auto-created a NEW empty
+# 'Calling Sheet' tab, so 01/09 rows landed in a fork while the team's real tab
+# silently went stale. GID survives renames.
+TAB_GID = 0
 SUMMARY_TAB = "Summary"
 
 # If GOOGLE_SA_JSON env var is set (base64 or raw JSON), write to temp file;
@@ -160,6 +166,23 @@ def run_query():
     return cols, rows
 
 
+def resolve_tab_name():
+    """Re-bind TAB_NAME to whatever the tab at TAB_GID is currently called."""
+    global TAB_NAME
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive",
+    ]
+    creds = Credentials.from_service_account_file(SA_JSON, scopes=scopes)
+    ws = gspread.authorize(creds).open_by_key(SHEET_ID).get_worksheet_by_id(TAB_GID)
+    if ws.title != TAB_NAME:
+        stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        print(f"[{stamp}] Calling tab (gid {TAB_GID}) is named {ws.title!r}, "
+              f"not {TAB_NAME!r} — binding to it.")
+        TAB_NAME = ws.title
+    return TAB_NAME
+
+
 def push_to_sheet(cols, rows):
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
@@ -172,7 +195,12 @@ def push_to_sheet(cols, rows):
     try:
         ws = sh.worksheet(TAB_NAME)
     except gspread.WorksheetNotFound:
-        ws = sh.add_worksheet(title=TAB_NAME, rows=1000, cols=20)
+        # NEVER auto-create: that forks the sheet and strands the team's manual
+        # columns in the old tab. Fail loudly so the run goes red instead.
+        raise SystemExit(
+            f"Calling tab {TAB_NAME!r} (gid {TAB_GID}) not found — refusing to "
+            f"auto-create a duplicate tab. Check the tab gid/name."
+        )
 
     col_idx = {c: i for i, c in enumerate(cols)}
     ordered = [
@@ -872,6 +900,7 @@ def _calling_sheet_needs_push():
 
 if __name__ == "__main__":
     try:
+        resolve_tab_name()
         if "--summary-only" in sys.argv:
             if _calling_sheet_needs_push():
                 stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
