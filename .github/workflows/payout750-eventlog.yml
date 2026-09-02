@@ -90,3 +90,12 @@ jobs:
           CT_PASS: ${{ secrets.CT_PASS }}
           GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
         run: python payout750_v4_tracker.py
+
+      # 8) "Delhi CSPs — Bonus & 750 Status": refresh ONLY the live 750 columns K:N
+      #    (delivered? / opt-in status / times-seen / distinct-days). Leaves A:J (bonus snapshot)
+      #    and O:Q (audit/consent) untouched.
+      - name: Delhi bonus tab → refresh live cols K:N
+        env:
+          CT_PASS: ${{ secrets.CT_PASS }}
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+        run: python delhi_kn_live.py
