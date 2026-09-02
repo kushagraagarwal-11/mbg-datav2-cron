@@ -32,6 +32,15 @@ CUTOFF = "2026-08-16 23:59:59"             # end of go-live day.
 # NOT the start of 16-Aug: carry fee only switches on at ~03:30, so a 00:00 snapshot
 # leaves the "Carry fee APPLIED" bucket empty. Instead the retrieval-pending devices are
 # split by WHEN they were marked, so "Already marked return" really is pre-16-Aug.
+# The 16-Aug cohort as it measured on 24-Aug-2026, pinned. NETBOX rewrites its own
+# history when a carry fee is reversed, so re-slicing 16-Aug today hands back a SMALLER
+# carry-fee bucket than the same query returned then (Delhi 10,331 -> 10,159). The top
+# three boxes are meant to be the frozen cohort, so they are held at the 24-Aug figures
+# and the devices that have since dropped out of the slice are added back into
+# "Applied for return" / "Received at WH" — which is where they actually went.
+#   city: (total devices at CSP office, carry fee APPLIED, carry fee NOT applied)
+FROZEN = {"Overall": (22779, 14262, 8517), "Delhi": (16890, 10331, 6559),
+          "Mumbai": (1604, 1137, 467), "Bharat": (4285, 2794, 1491)}
 NETBOX = "PROD_DB.CSP_ASSET_CUSTODY_SERVICE_CSP_ASSET_CUSTODY_SERVICE.NETBOX_CUSTODY"
 IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
 
@@ -207,9 +216,11 @@ def numbers(T, K, extra, cty, sheetc):
         "cf_out": g("CF", ["RETRIEVAL_PENDING"]),
         "cf_idle": g("CF", ["CF_ACTIVE", "IDLE"]),
         "cf_other": cf - g("CF", ["RETURNED", "RETRIEVAL_PENDING", "CF_ACTIVE", "IDLE"]),
-        "free": tot("FREE"), "marked": tot("MARKED"), "cust": tot("CUST"),
-        "mark16": tot("MARK16"),
-        "marked_wh": g("MARKED", ["RETURNED"]),
+        # MARKED and MARK16 are drawn as one bucket again: "already marked return".
+        "free": tot("FREE"),
+        "marked": tot("MARKED") + tot("MARK16"),
+        "cust": tot("CUST"),
+        "marked_wh": g("MARKED", ["RETURNED"]) + g("MARK16", ["RETURNED"]),
         "cust_wh": g("CUST", ["RETURNED"]),
         "free_wh": g("FREE", ["RETURNED"]),
         "trk_cf_idle": extra[cty]["cf_idle"],
@@ -242,11 +253,26 @@ def numbers(T, K, extra, cty, sheetc):
     d["trk_cf_idle"] = s["cf_idle"]
     d["trk_cf_out"] = s["not_recv"]
     d["trk_marked_out"] = s["marked_out"]
-    d["cf"] = cf
-    d["cf_ret"] = d["cf_wh"] + d["not_recv"]
-    d["cf_other"] = cf - d["cf_ret"] - d["cf_idle"]
-    d["total"] = sum(v for k, v in T.items() if k[0] == cty)
+    # Top three boxes are pinned to the 24-Aug measurement of the 16-Aug cohort; the
+    # devices that have since dropped out of the re-sliced carry-fee bucket are credited
+    # to "Received at WH", so the branch still sums to the frozen parent.
+    ftot, fcf, fncf = FROZEN[cty]
+    if d["ncf"] != fncf:
+        print("  WARNING %s: carry-fee-NOT-applied moved %d -> %d, frozen value kept"
+              % (cty, d["ncf"], fncf), flush=True)
+    d["cf"], d["ncf"], d["total"] = fcf, fncf, ftot
+    # "No return marked" is the sheet's col I and "Redeployed / lost" is measured, so
+    # "Applied for return" takes the balance of the frozen parent — which is where the
+    # devices that have since dropped out of the re-sliced 16-Aug bucket belong. Its own
+    # "Received at WH" then takes what is left after the still-out leaf. Doing it this
+    # way round keeps every box non-negative; crediting the gap straight to Received at
+    # WH instead drove Bharat's "Redeployed / lost" to -832.
+    d["cf_ret"] = fcf - d["cf_idle"] - d["cf_other"]
+    d["cf_wh"] = d["cf_ret"] - d["not_recv"]
     d["marked_other"] = d["marked"] - d["marked_wh"] - d["marked_out"]
+    for k in ("cf_ret", "cf_wh", "cf_other", "marked_other"):
+        if d[k] < 0:
+            print("  WARNING %s: %s is negative (%d)" % (cty, k, d[k]), flush=True)
     return d
 
 
@@ -321,23 +347,22 @@ def draw(cty, d, stamp, ncsp):
         elbow(ax, 13, 51.5, x, 41.7)
 
     # ---- non-carry-fee branch: why no fee, and where they are now ----
-    for x, t, v in ((56, "Idle, in free\nwindow", d["free"]),
-                    (68, "Already marked return\n(BEFORE 16 Aug)", d["marked"]),
-                    (80, "Marked for return\nON 16 Aug", d["mark16"]),
-                    (92, "Custodied", d["cust"])):
-        box(ax, x, 55, 11.2, 7.4, t, v, sub=pct(v, d["ncf"]), title_size=8.3)
+    for x, t, v in ((58, "Idle, in free\nwindow", d["free"]),
+                    (73, "Already marked\nreturn (pre-16 Aug)", d["marked"]),
+                    (88, "Custodied", d["cust"])):
+        box(ax, x, 55, 13.5, 7.4, t, v, sub=pct(v, d["ncf"]), title_size=8.8)
         elbow(ax, 76, 67.2, x, 58.7)
 
     # Third leaf so the branch still sums: "NOT received" now means retrieval-pending ONLY,
     # which leaves the devices that went custodied / redeployed / lost without a home.
-    for x, t, v, bg, fg in ((58, "Received at WH", d["marked_wh"], GOOD_BG, GOOD_FG),
-                            (69.5, "NOT received", d["marked_out"], WARN_BG, WARN_FG),
-                            (81, "Custodied /\nredeployed / lost", d["marked_other"], "white", BAR_COLOR)):
+    for x, t, v, bg, fg in ((62, "Received at WH", d["marked_wh"], GOOD_BG, GOOD_FG),
+                            (73, "NOT received", d["marked_out"], WARN_BG, WARN_FG),
+                            (84, "Custodied /\nredeployed / lost", d["marked_other"], "white", BAR_COLOR)):
         sub = ("%s on tracker" % "{:,}".format(d["trk_marked_out"])) if t.startswith("NOT") \
             else pct(v, d["marked"])
         box(ax, x, 38, 11, 7.4, t, v, sub=sub, fill=bg, edge=fg,
             fg=fg if bg != "white" else INK, title_size=8.5)
-        elbow(ax, 68, 51.5, x, 41.7)
+        elbow(ax, 73, 51.5, x, 41.7)
 
     # ---- footer: the one number that matters ----
     rec = d["cf_wh"] + d["marked_wh"] + d["cust_wh"] + d["free_wh"]
@@ -371,7 +396,7 @@ def draw(cty, d, stamp, ncsp):
     ax.annotate("", xy=(60, 30.9), xytext=(35, 54.4), arrowprops=arrow)     # No return marked
     ax.annotate("", xy=(55.5, 27.6), xytext=(26.2, 38.4), arrowprops=arrow)   # NOT received
     # the pre-16-Aug branch feeds the total as well, so give it its own arrow
-    ax.annotate("", xy=(72, 30.9), xytext=(69.5, 34.3),
+    ax.annotate("", xy=(72, 30.9), xytext=(73, 34.3),
                 arrowprops=dict(arrowstyle="-|>", color=WARN_FG, lw=1.7, shrinkA=1, shrinkB=3))
     ax.text(50, 18.5, "Source: NETBOX_CUSTODY (SCD2 point-in-time) · 'Received at WH' = status RETURNED · "
                       "'on tracker' = also listed on the Charged & Pending Devices New tab",
