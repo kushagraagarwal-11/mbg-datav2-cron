@@ -79,11 +79,35 @@ def load_scope():
     # deliberately left out of their counts. Honour it here or the "on tracker"
     # figures run above the Carry Fee CSPs tab this chart claims to tie to.
     tracker = {}
+    # The city tabs' own COUNTIFS, reproduced here so the three "still at CSP" leaves
+    # and their total match the Delhi / Mumbai / Bharat tabs exactly:
+    #   col I   carry fee active now       = COUNTIFS(A=csp, J="TRUE")
+    #   col J   marked, not yet received   = COUNTIFS(A=csp, L="RETRIEVAL_PENDING", M="")
+    #   col Z   marked before 16 Aug       = COUNTIFS(A=csp, M="Y", L="RETRIEVAL_PENDING")
+    #   col AB  total still at CSP         = col H (= I + J) + col Z
+    sheetc = collections.defaultdict(collections.Counter)
     for r in sh.get_worksheet_by_id(2056261339).get_values("A2:M"):
         r = list(r) + [""] * 13
-        if norm(r[2]) and not str(r[12]).strip():
-            tracker[norm(r[2])] = norm(r[0])
-    return city, tracker
+        dev, csp = norm(r[2]), norm(r[0])
+        if not dev:
+            continue
+        if not str(r[12]).strip():
+            tracker[dev] = csp
+        c = city.get(csp)
+        if not c:
+            continue
+        J, L, M = str(r[9]).strip(), str(r[11]).strip(), str(r[12]).strip()
+        for k in (c, "Overall"):
+            if J.upper() == "TRUE":
+                sheetc[k]["cf_idle"] += 1
+            if L == "RETRIEVAL_PENDING" and M == "":
+                sheetc[k]["not_recv"] += 1
+            if M.upper() == "Y" and L == "RETRIEVAL_PENDING":
+                sheetc[k]["marked_out"] += 1
+    for k in sheetc:
+        sheetc[k]["total"] = (sheetc[k]["cf_idle"] + sheetc[k]["not_recv"]
+                              + sheetc[k]["marked_out"])
+    return city, tracker, sheetc
 
 
 def fetch(city):
@@ -162,7 +186,7 @@ GROUP BY 1,2""" % {"nb": NETBOX}):
     return T, K, brk
 
 
-def numbers(T, K, extra, cty):
+def numbers(T, K, extra, cty, sheetc):
     def g(b, sts):
         return sum(T[(cty, b, s)] for s in sts)
 
@@ -205,11 +229,23 @@ def numbers(T, K, extra, cty):
     # Branch-only: the right-hand branch has its own "NOT received" box, so counting
     # every branch here would double-count those devices. Parents therefore come straight
     # from the 16-Aug snapshot and the header is the true, fixed cohort again.
-    d["not_recv"] = d["cf_out"]
-    d["cf_ret"] = d["cf_wh"] + d["cf_out"]
+    # The three leaves where a device can still be sitting at a CSP are taken straight
+    # from the city tabs' own COUNTIFS, so this chart reproduces Delhi's col I / col J /
+    # col Z and their col AB total exactly. Parents are then recomputed bottom-up from
+    # those leaves, which keeps every level summing; the frozen 16-Aug cohort above the
+    # dashed line is untouched and still ties to the true total.
+    s = sheetc[cty]
+    d["cf_idle"] = s["cf_idle"]        # col I  — carry fee active, no return marked
+    d["not_recv"] = s["not_recv"]      # col J  — marked on/after 16 Aug, not received
+    d["marked_out"] = s["marked_out"]  # col Z  — marked before 16 Aug, not received
+    d["tracker_out"] = s["total"]      # col AB — col H (I+J) + col Z
+    d["trk_cf_idle"] = s["cf_idle"]
+    d["trk_cf_out"] = s["not_recv"]
+    d["trk_marked_out"] = s["marked_out"]
     d["cf"] = cf
+    d["cf_ret"] = d["cf_wh"] + d["not_recv"]
+    d["cf_other"] = cf - d["cf_ret"] - d["cf_idle"]
     d["total"] = sum(v for k, v in T.items() if k[0] == cty)
-    d["marked_out"] = g("MARKED", ["RETRIEVAL_PENDING"])
     d["marked_other"] = d["marked"] - d["marked_wh"] - d["marked_out"]
     return d
 
@@ -325,9 +361,9 @@ def draw(cty, d, stamp, ncsp):
     # Every component spelled out, so the total can be checked against the boxes above.
     # trk_other_out has no box of its own: custodied / free-window / outside-cohort
     # devices that have since gone to retrieval.
-    ax.text(73, 23.4, "%s no return marked  +  %s not received  +  %s pre-16-Aug  +  %s other" % (
+    ax.text(73, 23.4, "%s no return marked  +  %s not received  +  %s pre-16-Aug" % (
                 "{:,}".format(d["trk_cf_idle"]), "{:,}".format(d["trk_cf_out"]),
-                "{:,}".format(d["trk_marked_out"]), "{:,}".format(d["trk_other_out"])),
+                "{:,}".format(d["trk_marked_out"])),
             ha="center", fontsize=8, color=WARN_FG, zorder=3)
     # Start each arrow at its box's right edge so neither cuts back across the tree.
     arrow = dict(arrowstyle="-|>", color=WARN_FG, lw=1.7, shrinkA=1, shrinkB=3,
@@ -373,7 +409,7 @@ def post(paths, stamp):
 
 if __name__ == "__main__":
     stamp = datetime.datetime.now(IST).strftime("%d %b %Y")
-    city, trk = load_scope()
+    city, trk, sheetc = load_scope()
     _c = collections.Counter(city.values())
     NCSP = {"Overall": len(city), "Delhi": _c["Delhi"], "Mumbai": _c["Mumbai"], "Bharat": _c["Bharat"]}
     globals()["TRACKER"] = trk
@@ -381,7 +417,7 @@ if __name__ == "__main__":
     print("tracker devices: %d" % len(trk), flush=True)
     paths = []
     for cty in ("Overall", "Delhi", "Mumbai", "Bharat"):
-        d = numbers(T, K, extra, cty)
+        d = numbers(T, K, extra, cty, sheetc)
         print("%-8s total=%d cf=%d applied=%d notrecv=%d  tracker_out=%d" % (cty, d["total"], d["cf"], d["cf_ret"], d["not_recv"], d["tracker_out"]), flush=True)
         paths.append(draw(cty, d, stamp, NCSP[cty]))
     if CHANNEL_ID:
