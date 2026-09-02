@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""750 opt-in tracker — 27-Aug campaign (live 27-Aug 10:30 AM), 92 CSPs.
+"""750 opt-in tracker — V4 Flow-1 wave (campaign 1787766976, published 02-Sep), 260 CSPs.
 
 Writes to the 750 opt-in sheet (1ap0K6GB...):
   - "Summary (V4)"    : Opted / Declined / Abandoned / Not viewed + viewed + decision rate
-  - "CSP Status (27-Aug)" : one row per CSP — status, viewed-at, decided-at, name, mobile, zone
+  - "CSP Status (V4)" : one row per CSP — status, viewed-at, decided-at, name, mobile, zone
 
 Opt-ins = backend DOMINANCE_CONSENT (real-time, all channels) + banner Confirmed/Closed-new;
 declines = Payout750_Declined/Closed-later; abandoned = viewed, no decision; scoped since go-live.
@@ -143,7 +143,7 @@ def main():
     deciders = nopt + ndec
     def pct(x): return f"{round(100*x/len(CSPS))}%" if CSPS else "-"
     summ = [
-        [f'750 opt-in — 27-Aug campaign  |  live 27-Aug 10:30 AM  |  {len(CSPS)} CSPs  |  updated {now:%d-%b %H:%M IST}'],
+        [f'750 opt-in — V4 Flow-1 wave  |  campaign 1787766976, published 02-Sep  |  {len(CSPS)} CSPs  |  updated {now:%d-%b %H:%M IST}'],
         [], ["STATUS (unique CSPs)", "count", "% of audience"],
         ["Opted in", nopt, pct(nopt)], ["Declined", ndec, pct(ndec)],
         ["Abandoned (viewed, no decision)", nab, pct(nab)], ["Not viewed yet", nnv, pct(nnv)],
@@ -166,7 +166,7 @@ def main():
     for c in sorted(abandoned):  body.append(row(c, "Abandoned", fmt(viewed[c]), "", "no decision yet"))
     for c in sorted(not_viewed): body.append(row(c, "Not viewed yet", "", "", ""))
     head = ["CSP ID", "Name", "Mobile", "Zone", "Status", "Viewed at (IST)", "Decided at (IST)", "Decision"]
-    note = [f"Per-CSP status — 27-Aug campaign — {len(CSPS)} CSPs — updated {now:%d-%b %H:%M IST}  |  Opted {nopt} · Declined {ndec} · Abandoned {nab} · Not viewed {nnv}"]
+    note = [f"Per-CSP status — V4 Flow-1 wave (campaign 1787766976) — {len(CSPS)} CSPs — updated {now:%d-%b %H:%M IST}  |  Opted {nopt} · Declined {ndec} · Abandoned {nab} · Not viewed {nnv}"]
     out = [note, [], head] + body
     try: ws2 = ss.worksheet(CSP_TAB); ws2.clear()
     except gspread.WorksheetNotFound: ws2 = ss.add_worksheet(CSP_TAB, rows=max(120, len(out) + 10), cols=8)

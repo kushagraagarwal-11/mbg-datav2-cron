@@ -81,3 +81,12 @@ jobs:
           CT_PASS: ${{ secrets.CT_PASS }}
           GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
         run: python payout750_v2_tracker.py
+
+      # 7) V4 Flow-1 wave (campaign 1787766976, 260 CSPs, published 02-Sep) →
+      #    "Summary (V4)" + "CSP Status (V4)". Runs here on the 5-min cadence (the standalone
+      #    hourly workflow was throttled by GitHub's scheduler and went stale).
+      - name: V4 tracker → "Summary (V4)" + "CSP Status (V4)"
+        env:
+          CT_PASS: ${{ secrets.CT_PASS }}
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+        run: python payout750_v4_tracker.py
