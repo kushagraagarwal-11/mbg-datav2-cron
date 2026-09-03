@@ -8,12 +8,18 @@ one.
 
   Request date            the day the retrieval was requested (IST)
   Total Device to Return  that CSP's retrieval-pending devices as at the END of
-                          the request date, including the ones raised that day.
-                          Past dates are read from NETBOX's SCD2 trail, so they
-                          reproduce identically on every run — frozen by
-                          construction. Today's row moves until midnight.
+                          the request date, including the ones raised that day,
+                          read from NETBOX's SCD2 trail.
+
   Current Date Req Count  devices that CSP requested on the request date itself
   Priority                P0 20+, P1 10-19, P2 5-9, P3 1-4, on Total Device to Return
+
+Runs ONCE a day at 00:01 IST, so every run covers the day that has just ended and
+each row is written complete, never as a part-day figure.
+
+The write is APPEND ONLY. A row is keyed on (Request date, csp_id); if that key is
+already on the tab it is left untouched, and nothing right of column H is ever
+written. Add your own columns and work in them freely — they survive every run.
 
 Scope = every CSP EXCEPT the 727 consented ones in EXCLUDE below.
 Creds from env (GitHub Actions secrets); local files as a laptop fallback.
@@ -215,7 +221,12 @@ for d, csp, n in req:
 for c in rows:
     rows[c].sort(key=lambda r: (r[0], -r[5], r[1]))
 
-# ---- 5) write ----
+# ---- 5) write — APPEND ONLY ----
+# The team adds their own columns to the right of H and works in them, so this
+# never clears, never resizes, and never reorders. A row is identified by
+# (Request date, csp_id): if that key is already on the tab it is left completely
+# alone, which keeps both the frozen figures and anything typed alongside them.
+# Only genuinely new keys are appended, at the bottom, in columns A:H only.
 import gspread
 from google.oauth2.service_account import Credentials
 _SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
@@ -226,34 +237,61 @@ creds = (Credentials.from_service_account_info(json.loads(_sa), scopes=_SCOPES) 
 sh = gspread.authorize(creds).open_by_key(SHEET)
 have = {w.title: w for w in sh.worksheets()}
 stamp = now_ist.strftime("%Y-%m-%d %H:%M IST")
+LAST = chr(64 + len(HDR))          # 'H'
 
+added_total = 0
 for city in ("Delhi", "Mumbai", "Bharat"):
     body = rows.get(city, [])
     if city in have:
         ws = have[city]
-        ws.clear()
-        ws.resize(rows=max(len(body) + 10, 50), cols=len(HDR))
     else:
-        ws = sh.add_worksheet(title=city, rows=max(len(body) + 10, 50), cols=len(HDR))
-    ws.update(values=[HDR] + body, range_name="A1", value_input_option="RAW")
-    ws.format("A1:%s1" % chr(64 + len(HDR)),
-              {"textFormat": {"bold": True,
-                              "foregroundColor": {"red": 1, "green": 1, "blue": 1}},
-               "backgroundColor": PINK})
-    ws.freeze(rows=1)
+        ws = sh.add_worksheet(title=city, rows=max(len(body) + 100, 200),
+                              cols=max(len(HDR) + 8, 16))
+
+    cur = ws.get_values("A1:%s1" % LAST)
+    if not cur or [str(x).strip() for x in (list(cur[0]) + [""] * len(HDR))[:len(HDR)]] != HDR:
+        ws.update(values=[HDR], range_name="A1:%s1" % LAST, value_input_option="RAW")
+        ws.format("A1:%s1" % LAST,
+                  {"textFormat": {"bold": True,
+                                  "foregroundColor": {"red": 1, "green": 1, "blue": 1}},
+                   "backgroundColor": PINK})
+        ws.freeze(rows=1)
+
+    # keys already on the tab, in their existing row order
+    seen = set()
+    existing = ws.get_values("A2:B")
+    for r in existing:
+        r = list(r) + ["", ""]
+        k = (str(r[0]).strip(), str(r[1]).strip())
+        if k != ("", ""):
+            seen.add(k)
+
+    new = [r for r in body if (r[0], r[1]) not in seen]
+    if new:
+        first = 2 + len(existing)
+        last = first + len(new) - 1
+        if ws.row_count < last:
+            ws.add_rows(last - ws.row_count + 50)
+        ws.update(values=new, range_name="A%d:%s%d" % (first, LAST, last),
+                  value_input_option="RAW")
+    added_total += len(new)
+
     ws.update_note("A1",
                    "Retrieval requests from %s onwards, %s CSPs.\n"
                    "One row per CSP per request date; a later request adds a NEW row.\n"
                    "Total Device to Return = retrieval-pending at the END of the request "
-                   "date (past dates from NETBOX SCD2, so they never move; today is live).\n"
+                   "date, from the NETBOX SCD2 trail.\n"
                    "Priority: P0 20+, P1 10-19, P2 5-9, P3 1-4.\n"
                    "Scope excludes the 727 consented CSPs.\n"
-                   "Auto-refreshed 12:00 / 15:00 / 18:00 / 21:00 / 00:00 IST\n"
-                   "Last update: %s" % (START.isoformat(), city, stamp))
-    log("%-7s -> %d rows" % (city, len(body)))
+                   "APPEND ONLY — existing rows are never rewritten and columns to the "
+                   "right of %s are never touched, so you can add your own and work in them.\n"
+                   "Runs once daily at 00:01 IST, covering the day that just ended.\n"
+                   "Last run: %s" % (START.isoformat(), city, LAST, stamp))
+    log("%-7s -> %d already there, %d appended" % (city, len(body) - len(new), len(new)))
 
 tot = sum(len(v) for v in rows.values())
 if tot != len(req):
-    raise SystemExit("row split lost data: %d written vs %d request rows" % (tot, len(req)))
+    raise SystemExit("row split lost data: %d in tabs vs %d request rows" % (tot, len(req)))
 p = collections.Counter(r[7] for v in rows.values() for r in v)
-log("done — %d rows | %s" % (tot, "  ".join("%s:%d" % (k, p[k]) for k in ("P0", "P1", "P2", "P3"))))
+log("done — %d source rows, %d newly appended | %s"
+    % (tot, added_total, "  ".join("%s:%d" % (k, p[k]) for k in ("P0", "P1", "P2", "P3"))))

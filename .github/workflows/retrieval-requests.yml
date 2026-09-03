@@ -1,11 +1,12 @@
-name: Retrieval requests — Delhi / Mumbai / Bharat (5x daily)
+name: Retrieval requests — Delhi / Mumbai / Bharat (daily 00:01 IST)
 
 on:
   schedule:
-    # 12:00 / 15:00 / 18:00 / 21:00 / 00:00 IST  =  06:30 / 09:30 / 12:30 / 15:30 / 18:30 UTC.
-    # GitHub throttles scheduled runs, so the real firing time drifts later. The tabs are a
-    # full rewrite and past dates come from the SCD2 trail, so a skipped tick costs nothing.
-    - cron: "30 6,9,12,15,18 * * *"
+    # 00:01 IST = 18:31 UTC the previous day. One run a day, just after midnight, so
+    # every row covers a day that has fully closed. GitHub throttles scheduled runs and
+    # may fire this late; the write is append-only and keyed on (date, csp), so a late or
+    # skipped run just picks the missing days up next time.
+    - cron: "31 18 * * *"
   workflow_dispatch: {}
 
 jobs:
