@@ -1,0 +1,27 @@
+name: Top-50 consent/opt-in sheet (every 30 min)
+
+on:
+  schedule:
+    # Dedicated, lightweight cron for the "Audit & consent pending -> Rs750 offer"
+    # sheet (top-50 rows, cols O:S). A single fast step on */30 is honoured by
+    # GitHub's scheduler far more reliably than the heavy 9-step */5 workflow
+    # (which gets throttled to every few hours). The main workflow also runs this
+    # script as a fallback floor; writes are idempotent (clear + rewrite O:S).
+    - cron: "*/30 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - name: Refresh top-50 consent/opt-in sheet (O:S)
+        env:
+          CT_PASS: ${{ secrets.CT_PASS }}
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+        run: python consent750_top50.py
