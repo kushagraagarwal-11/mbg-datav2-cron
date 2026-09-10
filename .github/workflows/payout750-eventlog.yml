@@ -99,3 +99,15 @@ jobs:
           CT_PASS: ${{ secrets.CT_PASS }}
           GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
         run: python delhi_kn_live.py
+
+      # 9) "Audit & consent pending -> Rs750 offer" sheet — top-50 rows, live O:S.
+      #    O = 750 offer shown? (Flow 2 live / seen), P = opt-in status (from the
+      #    EVENT Payout750_Confirmed — the consent API was removed, so a fired
+      #    confirm is the opt-in signal, NOT a backend write), Q = opt-in date,
+      #    R = consent completion (Yes/No) + S = consent completed-on, both from the
+      #    consent source sheet (1iUiiX…) matched by CSP ID.
+      - name: Top-50 consent/opt-in sheet → O:S live
+        env:
+          CT_PASS: ${{ secrets.CT_PASS }}
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+        run: python consent750_top50.py

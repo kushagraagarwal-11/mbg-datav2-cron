@@ -37,7 +37,10 @@ def mb(sql):
 
 
 def export(ev):
-    body = json.dumps({"event_name": ev, "from": 20260818, "to": 20260903}).encode()
+    # `to` must be a ROLLING current date (was hardcoded 20260903, which silently
+    # dropped every event after 3-Sep — e.g. all V4 views/declines from 4-Sep on).
+    to = int((datetime.datetime.now(IST) + datetime.timedelta(days=1)).strftime("%Y%m%d"))
+    body = json.dumps({"event_name": ev, "from": 20260818, "to": to}).encode()
     d = json.loads(urllib.request.urlopen(urllib.request.Request(CT + "/1/events.json?batch_size=1000", data=body, headers=HP), timeout=90).read().decode())
     cur = d.get("cursor"); recs = []; p = 0
     while cur and p < 500:
