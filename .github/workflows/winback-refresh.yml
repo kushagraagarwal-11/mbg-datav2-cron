@@ -2,7 +2,7 @@ name: P1/P2 Winbacks — Pre/Post, main tab T:AA, Daily Dashboard (every 2h)
 
 on:
   schedule:
-    # every 2 hours at :53 UTC = :23 past odd IST hours (laptop backup runs :13 past even-offset hours).
+    # every 2 hours at :53 UTC = 20:23, 22:23 ... IST; the laptop backup runs 19:13, 21:13 ... IST.
     # Moved from :43 on 14-Sep: that schedule never fired once in 8h (only manual runs did).
     # Replaces the laptop task WiomWinbackPrePost, which failed ~1 run in 3 on connection
     # resets and only ran while the laptop was on.
