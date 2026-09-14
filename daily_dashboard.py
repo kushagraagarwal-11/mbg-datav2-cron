@@ -4,13 +4,13 @@ Fill the 'Daily Dashboard' tab (gid 1292308429) of the P1/P2 Winbacks sheet.
 Rows are found by their LABEL in column B, never by fixed row number -- the reviewer adds
 and moves rows. Expected labels, top table then bottom table:
   89/KF · 89/Field · Exit · Non_compliant · P6_Fallouts/KF · P6_Fallouts/Field · 750 Opt out ·
-  Growth Team/KF · Growth Team/Field · Ghost Install · P1/P2/KF · P1/P2/Field · Total
+  Growth Team/KF · Growth Team/Field · Ghost Install · P1/KF · P1/Field · P2/KF · P2/Field · Total
 
 BUCKETS  (tracker = 'Kushagra/Fahad Winback' tab)
   /KF vs /Field    -> split by column F 'Winback and Visiting': Visiting = field visit ->
                       /Field, anything else = the K/F calling team -> /KF (reviewer, 12 + 14-Sep)
-                      Split: 89 (Category 'Winback _ 89 CSPs', P2, blank), P6_Fallouts,
-                      Growth Team, P1/P2 (142-CSP cohort appended 14-Sep).
+                      Split: 89 (Category 'Winback _ 89 CSPs', blank), P6_Fallouts,
+                      Growth Team, P1, P2 (the P1/P2 cohort; Category holds P1 or P2).
                       Ghost Install has no Visiting rows, so it is not split.
   Exit, 750 Opt out, Ghost Install -> tracker Category
   Non_compliant   -> the reviewer's 115-CSP list, all on BULK_DATE (8 Sep)
@@ -49,16 +49,16 @@ BULK_DATE = dt.date(2026, 9, 8)                 # Non_compliant: done in one go,
 
 ORDER = ["89/KF", "89/Field", "Exit", "Non_compliant", "P6_Fallouts/KF", "P6_Fallouts/Field",
          "750 Opt out", "Growth Team/KF", "Growth Team/Field", "Ghost Install",
-         "P1/P2/KF", "P1/P2/Field"]
-CAT2BUCKET = {"Winback _ 89 CSPs": "89", "P2": "89",
+         "P1/KF", "P1/Field", "P2/KF", "P2/Field"]
+CAT2BUCKET = {"Winback _ 89 CSPs": "89",
               "": "89",                        # undated-category rows in the 89 block
-              "P1/P2": "P1/P2",                # 142-CSP cohort appended 14-Sep, its own rows
+              "P1": "P1", "P2": "P2",          # the P1/P2 cohort, tier from Sheet5 'priority'
               "Exit": "Exit", "P6_Fallouts": "P6_Fallouts",
               "750 opt out": "750 Opt out", "Growth Team": "Growth Team",
               "Ghost Install": "Ghost Install",
               "Previous Good installers": None}
 # categories split by tracker col F 'Winback and Visiting': Visiting -> /Field, else -> /KF
-SPLIT = {"89", "P6_Fallouts", "Growth Team", "P1/P2"}
+SPLIT = {"89", "P6_Fallouts", "Growth Team", "P1", "P2"}
 T2_COLS = "C%d:K%d"
 NC_TAB = "Non_compliant list"
 GREEN = {"red": 0.80, "green": 0.92, "blue": 0.82}
