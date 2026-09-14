@@ -15,9 +15,10 @@ BUCKETS  (tracker = 'Kushagra/Fahad Winback' tab)
   PRECEDENCE: the tracker Category wins, then Non_compliant. No CSP is counted twice.
   750 Opt out is tracker-only now (the 3 CSPs marked there); the older opt750.csv is retired.
 
-TABLE 1  per bucket: C = total, D.. = per date
-  CSPs unlocked, counted ONCE on their date of calling / visit, where Soft Winback = Y.
-  Non_compliant: all on BULK_DATE.
+TABLE 1  per bucket: C = total, D.. = per date      *** FORMULA-DRIVEN IN THE SHEET ***
+  CSPs unlocked, counted on their date of calling / visit, where Soft Winback = Y.
+  Non_compliant: all on BULK_DATE. The sheet computes this itself from the tracker and the
+  'Non_compliant list' tab; this script never writes it and only prints a cross-check.
 
 TABLE 2  per bucket, pooled (sum numerators / sum denominators)
   C/D  B2A % pre/post     bookings offered -> technician assigned
@@ -53,6 +54,7 @@ CAT2BUCKET = {"Winback _ 89 CSPs": "89", "P2": "89",
               "Ghost Install": "Ghost Install",
               "Previous Good installers": None}
 T2_COLS = "C%d:K%d"
+NC_TAB = "Non_compliant list"
 GREEN = {"red": 0.80, "green": 0.92, "blue": 0.82}
 RED = {"red": 0.98, "green": 0.83, "blue": 0.83}
 WHITE = {"red": 1, "green": 1, "blue": 1}
@@ -173,11 +175,18 @@ def fetch_netbox(csp_ids):
 
 
 def main():
-    nc = load_noncompliant()
-
     gc = gclient()
     sh = gc.open_by_key(SHEET_ID)
     ws = sh.get_worksheet_by_id(OUT_GID)
+
+    # Non_compliant cohort: the in-sheet list tab is the source of truth (Table 1's formulas
+    # read it too, so the two tables cannot disagree). The secret is only a fallback.
+    try:
+        nc = {c[0].strip() for c in sh.worksheet(NC_TAB).get_values("A2:A1000") if c and c[0].strip()}
+    except Exception:
+        nc = set()
+    if not nc:
+        nc = load_noncompliant()
 
     colB = [c[0].strip() if c else "" for c in ws.get_values("B1:B60")]
 
@@ -218,7 +227,7 @@ def main():
         if g(0):
             # a CSP listed twice keeps its LOWER row: a0b5r9 is P6 at r178 and
             # 750 opt out at r197, and the reviewer counts it among the 3 opt-outs
-            trk[g(0)] ={"cat": g(3), "mode": g(4), "date": parse_ddmm(g(2)), "soft": g(8)}
+            trk[g(0)] = {"cat": g(3), "mode": g(4), "date": parse_ddmm(g(2)), "soft": g(8)}
 
     # --- bucket membership: tracker Category wins, then Non_compliant ------------
     member = {}
@@ -277,11 +286,19 @@ def main():
     t2_body = [row_for([c for c, bb in member.items() if bb == b]) for b in ORDER]
     t2_tot = row_for(list(member))
 
+    # Table 1 is FORMULA-DRIVEN in the sheet (reviewer, 14-Sep) -- never write it, or every
+    # run would replace the formulas with static numbers. The counts computed above are only
+    # a cross-check: a mismatch means the formulas and this script disagree on a rule.
     last_col = chr(ord("C") + len(dates))
-    data = [{"range": "C%d:%s%d" % (t1[b], last_col, t1[b]), "values": [row]}
-            for b, row in zip(ORDER, t1_body)]
-    data.append({"range": "C%d:%s%d" % (t1_total, last_col, t1_total), "values": [t1_tot]})
-    data += [{"range": T2_COLS % (t2[b], t2[b]), "values": [row]} for b, row in zip(ORDER, t2_body)]
+    mismatch = []
+    for b, row in zip(ORDER + ["Total"], t1_body + [t1_tot]):
+        r = t1_total if b == "Total" else t1[b]
+        got = (ws.get_values("C%d:%s%d" % (r, last_col, r)) or [[]])[0]
+        got = [int(v) if v.strip().lstrip("-").isdigit() else v for v in got] + [""] * (len(row) - len(got))
+        if got[:len(row)] != row:
+            mismatch.append((b, got[:len(row)], row))
+
+    data = [{"range": T2_COLS % (t2[b], t2[b]), "values": [row]} for b, row in zip(ORDER, t2_body)]
     data.append({"range": T2_COLS % (t2_total, t2_total), "values": [t2_tot]})
     data.append({"range": "C%d:K%d" % (t2_hdr - 1, t2_hdr - 1),
                  "values": [["B2A %", "", "A2I %", "", "Order applied (% of CSPs called)", "",
@@ -327,9 +344,10 @@ def main():
                 "fields": "userEnteredFormat.backgroundColor"}})
     sh.batch_update({"requests": reqs})
 
-    print("  Table 1  (bucket: total | per date %s)" % " ".join(d.strftime("%d") for _, d in dates))
-    for b, row in zip(ORDER + ["Total"], t1_body + [t1_tot]):
-        print("   %-14s %s" % (b, row))
+    print("  Table 1  formula-driven, not written. cross-check vs script: %s"
+          % ("all rows match" if not mismatch else "%d MISMATCH row(s)" % len(mismatch)))
+    for b, got, want in mismatch:
+        print("   MISMATCH %-14s sheet %s  script %s" % (b, got, want))
     print("  Table 2  (B2A pre/post, A2I pre/post, applied pre/post, delivered pre/post, 0 netbox)")
     for b, row in zip(ORDER + ["Total"], t2_body + [t2_tot]):
         print("   %-14s %s" % (b, row))
