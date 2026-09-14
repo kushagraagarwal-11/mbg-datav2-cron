@@ -1,33 +1,34 @@
 """
 Fill the 'Daily Dashboard' tab (gid 1292308429) of the P1/P2 Winbacks sheet.
 
-Rows are found by their LABEL in column B, never by fixed row number -- the reviewer adds
-and moves rows. Expected labels, top table then bottom table:
-  89/KF · 89/Field · Exit · Non_compliant · P6_Fallouts/KF · P6_Fallouts/Field · 750 Opt out ·
-  Growth Team/KF · Growth Team/Field · Ghost Install · P1/KF · P1/Field · P2/KF · P2/Field · Total
+LAYOUT (reviewer, 14-Sep): column B = bucket, column C = KF / Field, then the numbers.
+Rows are found by the (bucket, KF/Field) PAIR, never by row number -- the reviewer adds and
+moves rows. B is merged down a KF/Field pair, so a blank B inherits the bucket above.
+  89 Winback KF/Field · Exit Field · Non_compliant - · P6_Fallouts KF/Field · 750 Opt out Field ·
+  Growth Team KF/Field · Wrong enforcement KF · P1 KF/Field · P2 KF/Field · Total
 
 BUCKETS  (tracker = 'Kushagra/Fahad Winback' tab)
-  /KF vs /Field    -> split by column F 'Winback and Visiting': Visiting = field visit ->
-                      /Field, anything else = the K/F calling team -> /KF (reviewer, 12 + 14-Sep)
-                      Split: 89 (Category 'Winback _ 89 CSPs', blank), P6_Fallouts,
-                      Growth Team, P1, P2 (the P1/P2 cohort; Category holds P1 or P2).
-                      Ghost Install has no Visiting rows, so it is not split.
-  Exit, 750 Opt out, Ghost Install -> tracker Category
-  Non_compliant   -> the reviewer's 115-CSP list, all on BULK_DATE (8 Sep)
+  KF vs Field  -> tracker column F 'Winback and Visiting': Visiting = Field, else KF.
+                  Split this way: 89 Winback (Category 'Winback _ 89 CSPs' or blank),
+                  P6_Fallouts, Growth Team, P1, P2.
+  Fixed mode   -> Exit = Field (visited), 750 Opt out = Field, Wrong enforcement = KF
+                  (whatever column F says).
+  Non_compliant-> the 'Non_compliant list' tab minus CSPs any tracker category already owns,
+                  all on BULK_DATE (8 Sep).
   PRECEDENCE: the tracker Category wins, then Non_compliant. No CSP is counted twice.
-  750 Opt out is tracker-only now (the 3 CSPs marked there); the older opt750.csv is retired.
+  'Wrong enforcement' was 'Ghost Install' until 14-Sep; the old name is still accepted.
 
-TABLE 1  per bucket: C = total, D.. = per date      *** FORMULA-DRIVEN IN THE SHEET ***
+TABLE 1  per bucket: D = total, E.. = per date      *** FORMULA-DRIVEN IN THE SHEET ***
   CSPs unlocked, counted on their date of calling / visit, where Soft Winback = Y.
   Non_compliant: all on BULK_DATE. The sheet computes this itself from the tracker and the
   'Non_compliant list' tab; this script never writes it and only prints a cross-check.
 
 TABLE 2  per bucket, pooled (sum numerators / sum denominators)
-  C/D  B2A % pre/post     bookings offered -> technician assigned
-  E/F  A2I % pre/post     assigned -> installed
-  G/H  Order applied  pre/post   % of CSPs that placed a device order in the window
-  I/J  Order delivered pre/post  % of CSPs with an order FULFILLED, placed in the window
-  K    % with 0 netbox           netboxes in hand right now (no pre/post: a snapshot)
+  D/E  B2A % pre/post     bookings offered -> technician assigned
+  F/G  A2I % pre/post     assigned -> installed
+  H/I  Order applied  pre/post   % of CSPs that placed a device order in the window
+  J/K  Order delivered pre/post  % of CSPs with an order FULFILLED, placed in the window
+  L    % with 0 netbox           netboxes in hand right now (no pre/post: a snapshot)
   Pre  = 2026-08-25 .. 2026-08-31 (last week of August)
   Post = each CSP's date of calling / visit -> now (Non_compliant: 8 Sep).
   Leads are aged 48h on both sides (winback_common.AGED). Orders are not aged.
@@ -47,23 +48,30 @@ from winback_common import (SHEET_ID, PRE_START, PRE_END, CONN, AGED, mb, gclien
 OUT_GID = 1292308429
 BULK_DATE = dt.date(2026, 9, 8)                 # Non_compliant: done in one go, first date
 
-ORDER = ["89/KF", "89/Field", "Exit", "Non_compliant", "P6_Fallouts/KF", "P6_Fallouts/Field",
-         "750 Opt out", "Growth Team/KF", "Growth Team/Field", "Ghost Install",
-         "P1/KF", "P1/Field", "P2/KF", "P2/Field"]
-CAT2BUCKET = {"Winback _ 89 CSPs": "89",
-              "": "89",                        # undated-category rows in the 89 block
+NC = ("Non_compliant", "-")
+ORDER = [("89 Winback", "KF"), ("89 Winback", "Field"), ("Exit", "Field"), NC,
+         ("P6_Fallouts", "KF"), ("P6_Fallouts", "Field"), ("750 Opt out", "Field"),
+         ("Growth Team", "KF"), ("Growth Team", "Field"), ("Wrong enforcement", "KF"),
+         ("P1", "KF"), ("P1", "Field"), ("P2", "KF"), ("P2", "Field")]
+CAT2BUCKET = {"Winback _ 89 CSPs": "89 Winback",
+              "": "89 Winback",                # undated-category rows in the 89 block
               "P1": "P1", "P2": "P2",          # the P1/P2 cohort, tier from Sheet5 'priority'
               "Exit": "Exit", "P6_Fallouts": "P6_Fallouts",
               "750 opt out": "750 Opt out", "Growth Team": "Growth Team",
-              "Ghost Install": "Ghost Install",
+              "Wrong enforcement": "Wrong enforcement",
+              "Ghost Install": "Wrong enforcement",      # old name
               "Previous Good installers": None}
-# categories split by tracker col F 'Winback and Visiting': Visiting -> /Field, else -> /KF
-SPLIT = {"89", "P6_Fallouts", "Growth Team", "P1", "P2"}
-T2_COLS = "C%d:K%d"
+# buckets whose KF / Field is fixed; every other bucket is split by tracker column F
+FIXED_MODE = {"Exit": "Field", "750 Opt out": "Field", "Wrong enforcement": "KF"}
+T2_COLS = "D%d:L%d"
 NC_TAB = "Non_compliant list"
 GREEN = {"red": 0.80, "green": 0.92, "blue": 0.82}
 RED = {"red": 0.98, "green": 0.83, "blue": 0.83}
 WHITE = {"red": 1, "green": 1, "blue": 1}
+
+
+def name(pair):
+    return "%s %s" % pair
 
 
 def parse_ddmm(s):
@@ -194,11 +202,18 @@ def main():
     if not nc:
         nc = load_noncompliant()
 
-    colB = [c[0].strip() if c else "" for c in ws.get_values("B1:B60")]
+    # (bucket, KF/Field) per sheet row; B is merged down a pair, so blank B inherits
+    keys, prev = [], ""
+    for r in ws.get_values("B1:C60"):
+        b = r[0].strip() if len(r) > 0 else ""
+        c = r[1].strip() if len(r) > 1 else ""
+        lab = b if b else (prev if c else "")
+        prev = lab
+        keys.append((lab, c))
 
-    def find(label, after=0):
-        for i in range(after, len(colB)):
-            if colB[i] == label:
+    def find(pair, after=0):
+        for i in range(after, len(keys)):
+            if keys[i] == pair or (isinstance(pair, str) and keys[i][0] == pair):
                 return i + 1                    # 1-based sheet row
         return None
 
@@ -214,13 +229,13 @@ def main():
 
     dates = []
     hdr_row = min(t1.values()) - 1
-    for i, v in enumerate(ws.get_values("D%d:Z%d" % (hdr_row, hdr_row))[0]):
+    for i, v in enumerate(ws.get_values("E%d:Z%d" % (hdr_row, hdr_row))[0]):
         v = v.strip()
         if not v:
             continue
         m = re.match(r"^(\d{1,2})\s+(\w+)$", v)
         if m:
-            dates.append((4 + i, dt.datetime.strptime("%s %s 2026" % (m.group(1), m.group(2)),
+            dates.append((5 + i, dt.datetime.strptime("%s %s 2026" % (m.group(1), m.group(2)),
                                                       "%d %b %Y").date()))
     if not dates:
         print("ABORT: no date headers parsed from row %d" % hdr_row)
@@ -245,13 +260,12 @@ def main():
             unknown.add(t["cat"])
         if t["cat"] != "Previous Good installers":
             owned.add(csp)
-        b = CAT2BUCKET.get(t["cat"])
-        if b in SPLIT:
-            b += "/Field" if t["mode"].lower().startswith("visit") else "/KF"
-        if b:
-            member[csp] = b
+        base = CAT2BUCKET.get(t["cat"])
+        if base:
+            mode = FIXED_MODE.get(base) or ("Field" if t["mode"].lower().startswith("visit") else "KF")
+            member[csp] = (base, mode)
     for csp in nc - owned:
-        member.setdefault(csp, "Non_compliant")
+        member.setdefault(csp, NC)
     if unknown:
         print("  WARNING: tracker categories with no dashboard bucket: %r -- add them to "
               "CAT2BUCKET and the Table 1 formulas" % sorted(unknown))
@@ -259,7 +273,7 @@ def main():
     # --- table 1 ---------------------------------------------------------------
     counts = {b: {} for b in ORDER}
     for csp, b in member.items():
-        if b == "Non_compliant":
+        if b == NC:
             counts[b][BULK_DATE] = counts[b].get(BULK_DATE, 0) + 1
         else:
             t = trk.get(csp, {})
@@ -273,7 +287,7 @@ def main():
     pre = fetch_pre(set(member))
     pairs = []
     for csp, b in member.items():
-        if b == "Non_compliant":
+        if b == NC:
             pairs.append((csp, BULK_DATE))
         elif trk.get(csp, {}).get("date"):
             pairs.append((csp, trk[csp]["date"]))
@@ -305,21 +319,21 @@ def main():
     # Table 1 is FORMULA-DRIVEN in the sheet (reviewer, 14-Sep) -- never write it, or every
     # run would replace the formulas with static numbers. The counts computed above are only
     # a cross-check: a mismatch means the formulas and this script disagree on a rule.
-    last_col = chr(ord("C") + len(dates))
+    last_col = chr(ord("D") + len(dates))
     mismatch = []
     for b, row in zip(ORDER + ["Total"], t1_body + [t1_tot]):
         r = t1_total if b == "Total" else t1[b]
-        got = (ws.get_values("C%d:%s%d" % (r, last_col, r)) or [[]])[0]
+        got = (ws.get_values("D%d:%s%d" % (r, last_col, r)) or [[]])[0]
         got = [int(v) if v.strip().lstrip("-").isdigit() else v for v in got] + [""] * (len(row) - len(got))
         if got[:len(row)] != row:
             mismatch.append((b, got[:len(row)], row))
 
     data = [{"range": T2_COLS % (t2[b], t2[b]), "values": [row]} for b, row in zip(ORDER, t2_body)]
     data.append({"range": T2_COLS % (t2_total, t2_total), "values": [t2_tot]})
-    data.append({"range": "C%d:K%d" % (t2_hdr - 1, t2_hdr - 1),
+    data.append({"range": "D%d:L%d" % (t2_hdr - 1, t2_hdr - 1),
                  "values": [["B2A %", "", "A2I %", "", "Order applied (% of CSPs called)", "",
                              "Order delivered (% of CSPs called)", "", "Netbox now"]]})
-    data.append({"range": "C%d:K%d" % (t2_hdr, t2_hdr),
+    data.append({"range": "D%d:L%d" % (t2_hdr, t2_hdr),
                  "values": [["Pre", "Post", "Pre", "Post", "Pre", "Post", "Pre", "Post",
                              "% with 0 netbox"]]})
     ws.batch_update(data, value_input_option="RAW")
@@ -328,25 +342,25 @@ def main():
     reqs = [
         {"repeatCell": {
             "range": {"sheetId": sid, "startRowIndex": min(t1.values()) - 1, "endRowIndex": t2_total,
-                      "startColumnIndex": 2, "endColumnIndex": max(3 + len(dates), 11)},
+                      "startColumnIndex": 2, "endColumnIndex": max(4 + len(dates), 12)},
             "cell": {"userEnteredFormat": {"horizontalAlignment": "CENTER"}},
             "fields": "userEnteredFormat.horizontalAlignment"}},
         {"repeatCell": {
             "range": {"sheetId": sid, "startRowIndex": t2_hdr, "endRowIndex": t2_total,
-                      "startColumnIndex": 2, "endColumnIndex": 11},
+                      "startColumnIndex": 3, "endColumnIndex": 12},
             "cell": {"userEnteredFormat": {"backgroundColor": WHITE}},
             "fields": "userEnteredFormat.backgroundColor"}},
         {"repeatCell": {
             "range": {"sheetId": sid, "startRowIndex": t2_hdr - 2, "endRowIndex": t2_hdr,
-                      "startColumnIndex": 2, "endColumnIndex": 11},
+                      "startColumnIndex": 3, "endColumnIndex": 12},
             "cell": {"userEnteredFormat": {"textFormat": {"bold": True}, "wrapStrategy": "WRAP",
                                            "horizontalAlignment": "CENTER"}},
             "fields": "userEnteredFormat(textFormat.bold,wrapStrategy,horizontalAlignment)"}},
     ]
-    # post vs pre on each pair: D vs C, F vs E, H vs G, J vs I (0-based col of the POST cell)
+    # post vs pre on each pair: E vs D, G vs F, I vs H, K vs J (0-based col of the POST cell)
     for i, row in enumerate(t2_body + [t2_tot]):
         rr = (t2[ORDER[i]] if i < len(ORDER) else t2_total) - 1
-        for k, col in ((0, 3), (2, 5), (4, 7), (6, 9)):
+        for k, col in ((0, 4), (2, 6), (4, 8), (6, 10)):
             pre_s, post_s = row[k], row[k + 1]
             if pre_s == "-" or post_s == "-":
                 continue
@@ -363,10 +377,10 @@ def main():
     print("  Table 1  formula-driven, not written. cross-check vs script: %s"
           % ("all rows match" if not mismatch else "%d MISMATCH row(s)" % len(mismatch)))
     for b, got, want in mismatch:
-        print("   MISMATCH %-14s sheet %s  script %s" % (b, got, want))
+        print("   MISMATCH %-22s sheet %s  script %s" % (name(b) if isinstance(b, tuple) else b, got, want))
     print("  Table 2  (B2A pre/post, A2I pre/post, applied pre/post, delivered pre/post, 0 netbox)")
     for b, row in zip(ORDER + ["Total"], t2_body + [t2_tot]):
-        print("   %-14s %s" % (b, row))
+        print("   %-22s %s" % (name(b) if isinstance(b, tuple) else b, row))
     return 0
 
 
