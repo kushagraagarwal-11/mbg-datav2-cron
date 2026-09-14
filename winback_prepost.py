@@ -51,7 +51,7 @@ WHITE = {"red": 1, "green": 1, "blue": 1}
 
 # Layout is driven off the KPI count -- adding a KPI used to silently collide with the
 # MOVEMENT heading below it.
-N_KPIS = 8
+N_KPIS = 9
 KPI_ROW0 = 5                                               # sheet row of the first KPI
 N_MOVE = 4                                                 # B2A, A2I, B2I lines + caveat
 MOVE_ROW = KPI_ROW0 + N_KPIS + 1                           # blank line, then the heading
@@ -371,11 +371,18 @@ def main():
         ("B2A %  pre \u2192 post", "%s \u2192 %s" % (pct(agg["pa"], agg["pl"]), pct(agg["qa"], agg["ql"]))),
         ("A2I %  pre \u2192 post", "%s \u2192 %s" % (pct(agg["pi"], agg["pa"]), pct(agg["qi"], agg["qa"]))),
         ("B2I %  pre → post", "%s → %s" % (pct(agg["pi"], agg["pl"]), pct(agg["qi"], agg["ql"]))),
+        # (post installs/day - Aug installs/day) x 30, off the Total row -- written below as a
+        # live formula. A DIFFERENCE, not post/pre x 30: the ratio is a multiple, not installs.
+        ("Monthly run-rate added", ""),
     ]
-    # the three pre -> post rows get the same green/red rule as the table
+    # the pre -> post rows get the same green/red rule as the table
     kpi_move = {5: (pct(agg["pa"], agg["pl"]), pct(agg["qa"], agg["ql"])),
                 6: (pct(agg["pi"], agg["pa"]), pct(agg["qi"], agg["qa"])),
-                7: (pct(agg["pi"], agg["pl"]), pct(agg["qi"], agg["ql"]))}
+                7: (pct(agg["pi"], agg["pl"]), pct(agg["qi"], agg["ql"])),
+                8: (str(t_aug), str(t_post))}
+    ia, ja = ipd_col("Aug\nInstalls/day"), ipd_col("Post\nInstalls/day")
+    f_runrate = ('=LET(a,%s%d*30,b,%s%d*30,TEXT(b-a,"+#,##0;-#,##0")&" installs / month   ("&'
+                 'TEXT(a,"#,##0")&" → "&TEXT(b,"#,##0")&")")' % (ia, total_row, ja, total_row))
     pre_lab = "%s - %s" % (dt.date.fromisoformat(PRE_START).strftime("%d %b"),
                            dt.date.fromisoformat(PRE_END).strftime("%d %b %Y"))
 
@@ -409,6 +416,8 @@ def main():
               range_name="%s%d:%s%d" % (ipd_col("Aug\nInstalls/day"), total_row,
                                         ipd_col("Post\nInstalls/day"), total_row),
               value_input_option="USER_ENTERED")
+    ws.update(values=[[f_runrate]], range_name="D%d" % (KPI_ROW0 + kpis.index(
+        next(k for k in kpis if k[0] == "Monthly run-rate added"))), value_input_option="USER_ENTERED")
 
     sid = ws.id
     last = TABLE_ROW + len(body)          # last body row -- the filter stops here

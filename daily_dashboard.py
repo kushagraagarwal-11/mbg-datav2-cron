@@ -28,7 +28,7 @@ TABLE 2  per bucket, pooled (sum numerators / sum denominators)
   F/G  A2I % pre/post     assigned -> installed
   H    Order applied   (post)   % of called CSPs that placed a device order since the call
   I    Order delivered (post)   % of called CSPs with such an order FULFILLED
-  J    % with 0 netbox          netboxes in hand right now (a snapshot)
+  J    % of CSPs with netbox    >=1 netbox in hand right now (a snapshot)
   K/L  B2A % pre/post  } for ONLY the CSPs that applied for devices since the call
   M/N  A2I % pre/post  }   (user, 14-Sep: did ordering devices go with a funnel move?)
   Pre  = 2026-08-25 .. 2026-08-31 (last week of August)
@@ -307,7 +307,7 @@ def main():
         n = len(called)
         applied = [c for c in called if ord_post.get(c, (0, 0))[0] > 0]
         dq = sum(1 for c in called if ord_post.get(c, (0, 0))[1] > 0)
-        z = sum(1 for c in called if netbox.get(c, 0) == 0)
+        z = sum(1 for c in called if netbox.get(c, 0) > 0)      # has >=1 netbox in hand
         # the CSPs that applied for devices since the call: did their funnel move?
         opl = opa = opi = oql = oqa = oqi = 0
         for c in applied:
@@ -342,7 +342,7 @@ def main():
                              "CSPs that applied for devices: B2A %", "",
                              "CSPs that applied for devices: A2I %", ""]]})
     data.append({"range": "D%d:N%d" % (t2_hdr, t2_hdr),
-                 "values": [["Pre", "Post", "Pre", "Post", "Post", "Post", "% with 0 netbox",
+                 "values": [["Pre", "Post", "Pre", "Post", "Post", "Post", "% of CSPs with netbox",
                              "Pre", "Post", "Pre", "Post"]]})
     ws.batch_update(data, value_input_option="RAW")
 
