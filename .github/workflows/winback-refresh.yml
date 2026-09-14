@@ -2,10 +2,11 @@ name: P1/P2 Winbacks — Pre/Post, main tab T:AA, Daily Dashboard (every 2h)
 
 on:
   schedule:
-    # every 2 hours at :43 (staggered off Netbox :07/:22/:37/:52, Data V2 :17, Audit :37).
+    # every 2 hours at :53 UTC = :23 past odd IST hours (laptop backup runs :13 past even-offset hours).
+    # Moved from :43 on 14-Sep: that schedule never fired once in 8h (only manual runs did).
     # Replaces the laptop task WiomWinbackPrePost, which failed ~1 run in 3 on connection
     # resets and only ran while the laptop was on.
-    - cron: "43 */2 * * *"
+    - cron: "53 */2 * * *"
   workflow_dispatch: {}
 
 # a slow run must never overlap the next one -- winback_prepost.py clears its tab first
