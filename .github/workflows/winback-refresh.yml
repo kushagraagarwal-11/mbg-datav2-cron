@@ -1,0 +1,45 @@
+name: P1/P2 Winbacks — Pre/Post, main tab T:AA, Daily Dashboard (every 2h)
+
+on:
+  schedule:
+    # every 2 hours at :43 (staggered off Netbox :07/:22/:37/:52, Data V2 :17, Audit :37).
+    # Replaces the laptop task WiomWinbackPrePost, which failed ~1 run in 3 on connection
+    # resets and only ran while the laptop was on.
+    - cron: "43 */2 * * *"
+  workflow_dispatch: {}
+
+# a slow run must never overlap the next one -- winback_prepost.py clears its tab first
+concurrency:
+  group: winback-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+      MB_KEY: ${{ secrets.MB_KEY }}
+      NONCOMPLIANT_B64: ${{ secrets.NONCOMPLIANT_B64 }}
+      WINBACK_BACKUP_DIR: ${{ runner.temp }}
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+
+      # Each script computes everything before it writes, and every write is a full
+      # rebuild, so a retry after a transient failure is safe. The three tabs are
+      # independent: one failing does not skip the others.
+      - name: Pre/Post Winback tab
+        run: python winback_prepost.py || (sleep 90 && python winback_prepost.py)
+
+      - name: Main tab T:AA (non-soft rows)
+        if: always()
+        run: python winback_maintab_prepost.py || (sleep 90 && python winback_maintab_prepost.py)
+
+      - name: Daily Dashboard
+        if: always()
+        run: python daily_dashboard.py || (sleep 90 && python daily_dashboard.py)
