@@ -57,7 +57,7 @@ N_MOVE = 4                                                 # B2A, A2I, B2I lines
 MOVE_ROW = KPI_ROW0 + N_KPIS + 1                           # blank line, then the heading
 TABLE_ROW = MOVE_ROW + N_MOVE + 2                          # movement lines, blank, header
 HDRS = ["CSP ID", "CSP Name", "Called", "Active\nBase", "Unique\nRecoverable",
-        "Pre\nLeads", "Post\nLeads", "Pre\nB2A %", "Post\nB2A %",
+        "Pre\nLeads", "Post\nLeads", "Pre\nInstalls", "Post\nInstalls", "Pre\nB2A %", "Post\nB2A %",
         "Pre\nA2I %", "Post\nA2I %", "Pre\nB2I %", "Post\nB2I %", "Hard\nWinback"]
 # B2A = offered -> technician assigned ;  A2I = assigned -> installed
 # B2I = offered -> installed (end to end). Hard Winback is judged on B2I: he has to take
@@ -193,10 +193,11 @@ def main():
         if r["called"]:
             ql, qa, qi = post.get(r["csp"], (0, 0, 0))
             post_asg, post_ins, post_b2i = pct(qa, ql), pct(qi, qa), pct(qi, ql)
-            post_l, post_t = cnt(ql), cnt(qa)
+            # installs: a real 0 when he had leads and converted none; "-" only with no leads
+            post_l, post_t, post_i = cnt(ql), cnt(qa), (int(qi) if ql else "-")
             agg["ql"] += ql; agg["qa"] += qa; agg["qi"] += qi
         else:
-            post_asg = post_ins = post_b2i = post_l = post_t = "-"
+            post_asg = post_ins = post_b2i = post_l = post_t = post_i = "-"
 
         # Hard winback = post B2I beats pre B2I. B2I is the end-to-end rate, so it only
         # moves if he both accepted more work and converted it. Computed here, not read
@@ -210,7 +211,7 @@ def main():
         body.append([r["csp"], r["name"], r["date_raw"] or "-",
                      cnt(active.get(r["csp"], 0)),
                      cnt(int(r["recoverable"]) if r["recoverable"].isdigit() else 0),
-                     cnt(pl), post_l, pre_asg, post_asg,
+                     cnt(pl), post_l, (int(pi) if pl else "-"), post_i, pre_asg, post_asg,
                      pre_ins, post_ins, pre_b2i, post_b2i, hard])
         rown = TABLE_ROW + len(body)
 
@@ -239,6 +240,28 @@ def main():
         ws = sh.worksheet(OUT_TAB)
     except gspread.WorksheetNotFound:
         ws = sh.add_worksheet(title=OUT_TAB, rows=TABLE_ROW + len(body) + 20, cols=NCOL + 3)
+
+    # A reviewer added a filter sorted by Hard Winback (14-Sep). Remember its sort / filter
+    # columns BY HEADER NAME, drop it for the rebuild, and put it back over the new table at the
+    # end -- otherwise a column added to HDRS leaves it pointing at the wrong columns.
+    keep = None
+    meta = sh.fetch_sheet_metadata({"fields": "sheets(properties(sheetId),basicFilter)"})
+    bf = next((s.get("basicFilter") for s in meta["sheets"]
+               if s["properties"]["sheetId"] == ws.id), None)
+    if bf:
+        col_b = ws.col_values(2)
+        hr = next((i for i, v in enumerate(col_b) if v.strip() == "CSP ID"), None)
+        old_hdr = ws.row_values(hr + 1) if hr is not None else []
+
+        def remap(ci):
+            h = old_hdr[ci] if ci < len(old_hdr) else ""
+            return 1 + HDRS.index(h) if h in HDRS else None
+
+        keep = ([dict(s, dimensionIndex=remap(s["dimensionIndex"])) for s in bf.get("sortSpecs", [])
+                 if remap(s["dimensionIndex"]) is not None],
+                [dict(f, columnIndex=remap(f["columnIndex"])) for f in bf.get("filterSpecs", [])
+                 if remap(f["columnIndex"]) is not None])
+        sh.batch_update({"requests": [{"clearBasicFilter": {"sheetId": ws.id}}]})
     ws.clear()
     # ws.clear() wipes VALUES ONLY -- old backgrounds/merges survive and pile up run to run.
     # Reset the whole canvas first, otherwise last run's red/green lands in the KPI area.
@@ -352,7 +375,10 @@ def main():
             "range": {"sheetId": sid, "dimension": "COLUMNS", "startIndex": 0, "endIndex": 1},
             "properties": {"pixelSize": 26}, "fields": "pixelSize"}},
     ]
-    for idx, w in enumerate([88, 178, 88, 76, 90, 62, 62, 76, 80, 74, 78, 74, 78, 84]):
+    widths = {"CSP ID": 88, "CSP Name": 178, "Called": 88, "Active\nBase": 76,
+              "Unique\nRecoverable": 90, "Hard\nWinback": 84}
+    for idx, w in enumerate(widths.get(h, 64 if ("Leads" in h or "Installs" in h) else 76)
+                            for h in HDRS):
         reqs.append({"updateDimensionProperties": {
             "range": {"sheetId": sid, "dimension": "COLUMNS",
                       "startIndex": 1 + idx, "endIndex": 2 + idx},
@@ -395,6 +421,12 @@ def main():
             "cell": {"userEnteredFormat": {"backgroundColor": bg}},
             "fields": "userEnteredFormat.backgroundColor"}})
     sh.batch_update({"requests": reqs})
+
+    if keep is not None:                    # restore the reviewer's filter / sort, last
+        sh.batch_update({"requests": [{"setBasicFilter": {"filter": {
+            "range": {"sheetId": sid, "startRowIndex": TABLE_ROW - 1, "endRowIndex": last,
+                      "startColumnIndex": 1, "endColumnIndex": 1 + NCOL},
+            "sortSpecs": keep[0], "filterSpecs": keep[1]}}}]})
 
     print("dashboard rebuilt: %d CSPs (%d called, %d awaiting), %d cells coloured | "
           "B2A %s->%s, A2I %s->%s, B2I %s->%s, hard winback %d | leads pre %d post %d (aged %dh)"
