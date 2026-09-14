@@ -30,10 +30,18 @@ jobs:
           python-version: "3.11"
       - run: pip install -r requirements.txt
 
-      # Each script computes everything before it writes, and every write is a full
-      # rebuild, so a retry after a transient failure is safe. The three tabs are
-      # independent: one failing does not skip the others.
+      # Each script computes everything before it writes, and every write is either a full
+      # rebuild or a changed-cells-only update, so a retry after a transient failure is safe.
+      # The steps are independent: one failing does not skip the others.
+      #
+      # Visit dates first: Exit + Visiting (89/Field) rows take their date of visit, soft
+      # winback, CI and 750 from the Willing to Exit CSPs sheet, and the dashboards below
+      # start those CSPs' post windows from that date.
+      - name: Sync visit dates (Willing to Exit sheet -> tracker D, J, K, L)
+        run: python sync_exit_visits.py || (sleep 90 && python sync_exit_visits.py)
+
       - name: Pre/Post Winback tab
+        if: always()
         run: python winback_prepost.py || (sleep 90 && python winback_prepost.py)
 
       - name: Main tab T:AA (non-soft rows)
