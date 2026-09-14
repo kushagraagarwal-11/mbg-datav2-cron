@@ -131,7 +131,7 @@ def main():
         print("ABORT: T3:AA3 is %r, expected %r -- columns have moved, re-map before running." % (hdr, expect))
         return 1
 
-    grid = ws.get_values("B4:AB300")
+    grid = ws.get_values("B4:AB2000")
     n = len(grid)
 
     def g(r, i):

@@ -89,7 +89,7 @@ def main():
     today = dt.datetime.now(IST).date()
     gc = gclient()
 
-    rows = gc.open_by_key(SOURCE_SHEET).get_worksheet_by_id(0).get_values("A1:H400")
+    rows = gc.open_by_key(SOURCE_SHEET).get_worksheet_by_id(0).get_values("A1:H2000")
     hdr = [c.strip().lower() for c in rows[0]]
     ix = {k: next((i for i, h in enumerate(hdr) if k in h), None)
           for k in ("csp id", "date of visit", "soft winback", "ci(m1)", "750")}
@@ -124,7 +124,7 @@ def main():
         print("ABORT: tracker E3:F3 is %r -- columns moved." % ws.get_values("E3:F3")[0])
         return 1
 
-    grid = ws.get_values("B4:L400")
+    grid = ws.get_values("B4:L2000")
     n = len(grid)
 
     def g(r, i):

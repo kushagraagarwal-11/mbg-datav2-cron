@@ -156,7 +156,7 @@ def main():
     src = sh.get_worksheet_by_id(SRC_GID)
 
     rows = []
-    for r in src.get_values("B4:AB300"):
+    for r in src.get_values("B4:AB2000"):
         def g(k):
             return r[k].strip() if len(r) > k else ""
         if not g(0) or not g(8).upper().startswith("Y"):

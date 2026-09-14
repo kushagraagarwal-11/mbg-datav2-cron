@@ -3,14 +3,16 @@ Fill the 'Daily Dashboard' tab (gid 1292308429) of the P1/P2 Winbacks sheet.
 
 Rows are found by their LABEL in column B, never by fixed row number -- the reviewer adds
 and moves rows. Expected labels, top table then bottom table:
-  89/KF · 89/Field · Exit · Non_compliant · P6_Fallouts · 750 Opt out · Growth Team ·
-  Ghost Install · Total
+  89/KF · 89/Field · Exit · Non_compliant · P6_Fallouts/KF · P6_Fallouts/Field · 750 Opt out ·
+  Growth Team/KF · Growth Team/Field · Ghost Install · P1/P2/KF · P1/P2/Field · Total
 
 BUCKETS  (tracker = 'Kushagra/Fahad Winback' tab)
-  89/KF / 89/Field -> Category 'Winback _ 89 CSPs' (and P2 / blank), split by column F
-                      'Winback and Visiting': Visiting = field visit -> 89/Field, otherwise
-                      the K/F calling team -> 89/KF   (reviewer, 12-Sep)
-  Exit, P6_Fallouts, 750 Opt out, Growth Team, Ghost Install -> tracker Category
+  /KF vs /Field    -> split by column F 'Winback and Visiting': Visiting = field visit ->
+                      /Field, anything else = the K/F calling team -> /KF (reviewer, 12 + 14-Sep)
+                      Split: 89 (Category 'Winback _ 89 CSPs', P2, blank), P6_Fallouts,
+                      Growth Team, P1/P2 (142-CSP cohort appended 14-Sep).
+                      Ghost Install has no Visiting rows, so it is not split.
+  Exit, 750 Opt out, Ghost Install -> tracker Category
   Non_compliant   -> the reviewer's 115-CSP list, all on BULK_DATE (8 Sep)
   PRECEDENCE: the tracker Category wins, then Non_compliant. No CSP is counted twice.
   750 Opt out is tracker-only now (the 3 CSPs marked there); the older opt750.csv is retired.
@@ -45,14 +47,18 @@ from winback_common import (SHEET_ID, PRE_START, PRE_END, CONN, AGED, mb, gclien
 OUT_GID = 1292308429
 BULK_DATE = dt.date(2026, 9, 8)                 # Non_compliant: done in one go, first date
 
-ORDER = ["89/KF", "89/Field", "Exit", "Non_compliant", "P6_Fallouts", "750 Opt out",
-         "Growth Team", "Ghost Install"]
-CAT2BUCKET = {"Winback _ 89 CSPs": "89", "P2": "89", "P1/P2": "89",
+ORDER = ["89/KF", "89/Field", "Exit", "Non_compliant", "P6_Fallouts/KF", "P6_Fallouts/Field",
+         "750 Opt out", "Growth Team/KF", "Growth Team/Field", "Ghost Install",
+         "P1/P2/KF", "P1/P2/Field"]
+CAT2BUCKET = {"Winback _ 89 CSPs": "89", "P2": "89",
               "": "89",                        # undated-category rows in the 89 block
+              "P1/P2": "P1/P2",                # 142-CSP cohort appended 14-Sep, its own rows
               "Exit": "Exit", "P6_Fallouts": "P6_Fallouts",
               "750 opt out": "750 Opt out", "Growth Team": "Growth Team",
               "Ghost Install": "Ghost Install",
               "Previous Good installers": None}
+# categories split by tracker col F 'Winback and Visiting': Visiting -> /Field, else -> /KF
+SPLIT = {"89", "P6_Fallouts", "Growth Team", "P1/P2"}
 T2_COLS = "C%d:K%d"
 NC_TAB = "Non_compliant list"
 GREEN = {"red": 0.80, "green": 0.92, "blue": 0.82}
@@ -221,7 +227,7 @@ def main():
         return 1
 
     trk = {}
-    for r in sh.get_worksheet_by_id(0).get_values("B4:J300"):
+    for r in sh.get_worksheet_by_id(0).get_values("B4:J2000"):
         def g(k):
             return r[k].strip() if len(r) > k else ""
         if g(0):
@@ -240,8 +246,8 @@ def main():
         if t["cat"] != "Previous Good installers":
             owned.add(csp)
         b = CAT2BUCKET.get(t["cat"])
-        if b == "89":
-            b = "89/Field" if t["mode"].lower().startswith("visit") else "89/KF"
+        if b in SPLIT:
+            b += "/Field" if t["mode"].lower().startswith("visit") else "/KF"
         if b:
             member[csp] = b
     for csp in nc - owned:
