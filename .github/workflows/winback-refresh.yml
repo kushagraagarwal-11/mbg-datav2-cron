@@ -21,7 +21,7 @@ jobs:
       GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
       MB_KEY: ${{ secrets.MB_KEY }}
       NONCOMPLIANT_B64: ${{ secrets.NONCOMPLIANT_B64 }}
-      WINBACK_BACKUP_DIR: ${{ runner.temp }}
+      WINBACK_BACKUP_DIR: /tmp          # runner is discarded; the backup only guards one run
       PYTHONIOENCODING: utf-8
     steps:
       - uses: actions/checkout@v4
