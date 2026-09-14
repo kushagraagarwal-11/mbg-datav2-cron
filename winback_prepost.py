@@ -57,7 +57,8 @@ N_MOVE = 4                                                 # B2A, A2I, B2I lines
 MOVE_ROW = KPI_ROW0 + N_KPIS + 1                           # blank line, then the heading
 TABLE_ROW = MOVE_ROW + N_MOVE + 2                          # movement lines, blank, header
 HDRS = ["CSP ID", "CSP Name", "Called", "Active\nBase", "Unique\nRecoverable",
-        "Pre\nLeads", "Post\nLeads", "Pre\nInstalls", "Post\nInstalls", "Pre\nB2A %", "Post\nB2A %",
+        "Pre\nLeads", "Post\nLeads", "Aug\nInstalls/day", "Post\nInstalls/day",
+        "Pre\nB2A %", "Post\nB2A %",
         "Pre\nA2I %", "Post\nA2I %", "Pre\nB2I %", "Post\nB2I %", "Hard\nWinback"]
 # B2A = offered -> technician assigned ;  A2I = assigned -> installed
 # B2I = offered -> installed (end to end). Hard Winback is judged on B2I: he has to take
@@ -68,6 +69,12 @@ COL_POST_B2A = HDRS.index("Post\nB2A %") + 1
 COL_POST_A2I = HDRS.index("Post\nA2I %") + 1
 COL_POST_B2I = HDRS.index("Post\nB2I %") + 1
 COL_HARD = HDRS.index("Hard\nWinback") + 1
+COL_POST_IPD = HDRS.index("Post\nInstalls/day") + 1
+
+# Installs per day (user, 14-Sep). Dated by when the install COMPLETED, not by lead cohort:
+#   Aug  = installs completed 1-31 Aug  / 31
+#   Post = installs completed from the call date to YESTERDAY / full days since the call
+AUG_START, AUG_END, AUG_DAYS = "2026-08-01", "2026-08-31", 31
 
 
 def parse_ddmm(s):
@@ -139,6 +146,43 @@ def fetch_active(csp_ids):
     return out
 
 
+def fetch_installs(dated_or_all, today):
+    """-> {csp: (aug_installs, post_installs)} by install completion date (IST).
+    All row versions: INSTALLATION_COMPLETED_AT, or for the few installs that never get one,
+    the VALID_FROM of the first version showing the install. Attributed to the installing CSP."""
+    out = {}
+    rows = sorted(dated_or_all, key=lambda r: r["csp"])
+    for i in range(0, len(rows), 60):
+        chunk = rows[i:i + 60]
+        union = " UNION ALL ".join(
+            "SELECT '%s' AS csp_id, %s AS start_d" % (
+                r["csp"], ("DATE '%s'" % r["called"].isoformat()) if r["called"] else "NULL::DATE")
+            for r in chunk)
+        for rr in mb("""
+        WITH w AS (%s),
+        v AS (
+          SELECT f.CSP_ID, f.CONNECTION_ID,
+                 TO_DATE(CONVERT_TIMEZONE('Asia/Kolkata',
+                   COALESCE(MIN(f.INSTALLATION_COMPLETED_AT),
+                            MIN(IFF(f.OTP_VERIFIED_FLAG OR f.COMPLETED_STEP>=7, f.VALID_FROM, NULL))))) AS d
+          FROM PROD_DB.DBT_CSP.FACT_INSTALL_CANDIDATES f
+          JOIN w ON w.csp_id = f.CSP_ID
+          WHERE f.OTP_VERIFIED_FLAG OR f.INSTALLATION_COMPLETED_AT IS NOT NULL OR f.COMPLETED_STEP>=7
+          GROUP BY 1, 2)
+        SELECT v.CSP_ID,
+               SUM(IFF(v.d BETWEEN '%s' AND '%s', 1, 0)),
+               SUM(IFF(w.start_d IS NOT NULL AND v.d >= w.start_d AND v.d < DATE '%s', 1, 0))
+        FROM v JOIN w ON w.csp_id = v.CSP_ID
+        GROUP BY 1
+        """ % (union, AUG_START, AUG_END, today.isoformat())):
+            out[rr[0]] = (int(rr[1] or 0), int(rr[2] or 0))
+    return out
+
+
+def per_day(n, days):
+    return round(float(n) / days, 2) if days else "-"
+
+
 def txt(v, size=10, bold=False, colour=None, align="LEFT", bg=None, wrap=False):
     f = {"textFormat": {"fontSize": size, "bold": bold,
                         "foregroundColor": colour or {"red": 0, "green": 0, "blue": 0}},
@@ -171,9 +215,12 @@ def main():
     active = fetch_active({r["csp"] for r in rows})
     dated = [r for r in rows if r["called"]]
     post = fetch_post(dated) if dated else {}
+    today = dt.datetime.now(dt.timezone(dt.timedelta(hours=5, minutes=30))).date()
+    inst = fetch_installs(rows, today)
 
     body, colours = [], []
-    agg = {"pl": 0, "pa": 0, "pi": 0, "ql": 0, "qa": 0, "qi": 0}
+    agg = {"pl": 0, "pa": 0, "pi": 0, "ql": 0, "qa": 0, "qi": 0,
+           "aug": 0, "aug_days": 0, "pinst": 0, "pdays": 0}
     move = {"asg": [0, 0, 0], "ins": [0, 0, 0], "b2i": [0, 0, 0]}            # improved, declined, flat/none
     recov_total = 0
     active_total = 0
@@ -190,14 +237,20 @@ def main():
         active_total += active.get(r["csp"], 0)
 
         pre_b2i = pct(pi, pl)                       # offered -> installed, end to end
+        aug_n, post_n = inst.get(r["csp"], (0, 0))
+        aug_ipd = per_day(aug_n, AUG_DAYS)
+        agg["aug"] += aug_n; agg["aug_days"] += AUG_DAYS
         if r["called"]:
             ql, qa, qi = post.get(r["csp"], (0, 0, 0))
             post_asg, post_ins, post_b2i = pct(qa, ql), pct(qi, qa), pct(qi, ql)
-            # installs: a real 0 when he had leads and converted none; "-" only with no leads
-            post_l, post_t, post_i = cnt(ql), cnt(qa), (int(qi) if ql else "-")
+            post_l, post_t = cnt(ql), cnt(qa)
             agg["ql"] += ql; agg["qa"] += qa; agg["qi"] += qi
+            days = max((today - r["called"]).days, 0)     # full days, call date .. yesterday
+            post_ipd = per_day(post_n, days)
+            if days:
+                agg["pinst"] += post_n; agg["pdays"] += days
         else:
-            post_asg = post_ins = post_b2i = post_l = post_t = post_i = "-"
+            post_asg = post_ins = post_b2i = post_l = post_t = post_ipd = "-"
 
         # Hard winback = post B2I beats pre B2I. B2I is the end-to-end rate, so it only
         # moves if he both accepted more work and converted it. Computed here, not read
@@ -211,7 +264,7 @@ def main():
         body.append([r["csp"], r["name"], r["date_raw"] or "-",
                      cnt(active.get(r["csp"], 0)),
                      cnt(int(r["recoverable"]) if r["recoverable"].isdigit() else 0),
-                     cnt(pl), post_l, (int(pi) if pl else "-"), post_i, pre_asg, post_asg,
+                     cnt(pl), post_l, aug_ipd, post_ipd, pre_asg, post_asg,
                      pre_ins, post_ins, pre_b2i, post_b2i, hard])
         rown = TABLE_ROW + len(body)
 
@@ -232,8 +285,30 @@ def main():
         band(pre_asg, post_asg, COL_POST_B2A, "asg")
         band(pre_ins, post_ins, COL_POST_A2I, "ins")
         band(pre_b2i, post_b2i, COL_POST_B2I, "b2i")
+        if aug_ipd != "-" and post_ipd != "-" and post_ipd != aug_ipd:   # per day IS comparable
+            colours.append((rown, COL_POST_IPD, GREEN if post_ipd > aug_ipd else RED))
         if hard == "Yes":                      # green flag on the verdict itself
             colours.append((rown, COL_HARD, GREEN))
+
+    # TOTAL row -- sums for counts; everything else pooled (sum of numerators / sum of
+    # denominators), never an average of the per-CSP averages.
+    t_aug = per_day(agg["aug"], agg["aug_days"])            # installs per CSP per day
+    t_post = per_day(agg["pinst"], agg["pdays"])
+    total = ["Total", "%d CSPs" % len(rows), "-", active_total, recov_total,
+             agg["pl"], agg["ql"], t_aug, t_post,
+             pct(agg["pa"], agg["pl"]), pct(agg["qa"], agg["ql"]),
+             pct(agg["pi"], agg["pa"]), pct(agg["qi"], agg["qa"]),
+             pct(agg["pi"], agg["pl"]), pct(agg["qi"], agg["ql"]), hard_count[0]]
+    total_row = TABLE_ROW + len(body) + 1
+    for pre_s, post_s, col in ((t_aug, t_post, COL_POST_IPD),
+                               (total[9], total[10], COL_POST_B2A),
+                               (total[11], total[12], COL_POST_A2I),
+                               (total[13], total[14], COL_POST_B2I)):
+        if pre_s == "-" or post_s == "-":
+            continue
+        a = float(str(pre_s).rstrip("%")); b = float(str(post_s).rstrip("%"))
+        if a != b:
+            colours.append((total_row, col, GREEN if b > a else RED))
 
     stamp = dt.datetime.now(dt.timezone(dt.timedelta(hours=5, minutes=30)))
     try:
@@ -315,13 +390,17 @@ def main():
     grid[mv + 3][0] = "B2I %%   ▲ %d improved    ▼ %d declined    – %d flat / no post data" % tuple(move["b2i"])
     grid[mv + 4][0] = ("Read with care: Pre is a 7-day window (%s leads); Post runs from each call to "
                        "%dh ago (%s leads), so a CSP called in the last 2 days shows no Post yet. "
-                       "Rates are comparable, but Post sits on small denominators."
+                       "Rates are comparable, but Post sits on small denominators. Installs/day: "
+                       "Aug = August installs / 31; Post = installs from the call date to yesterday / "
+                       "days since the call. Total row = sums, or pooled (sum / sum), never an "
+                       "average of averages."
                        % ("{:,}".format(agg["pl"]), AGING_HOURS, "{:,}".format(agg["ql"])))
 
-    ws.update(values=grid + [HDRS] + body, range_name="B2", value_input_option="RAW")
+    ws.update(values=grid + [HDRS] + body + [total], range_name="B2", value_input_option="RAW")
 
     sid = ws.id
-    last = TABLE_ROW + len(body)
+    last = TABLE_ROW + len(body)          # last body row -- the filter stops here
+    tot_r = last + 1                      # total row sits outside the filter, so sorting skips it
     reqs = [
         {"updateSheetProperties": {
             "properties": {"sheetId": sid,
@@ -360,10 +439,22 @@ def main():
                         "fields": "userEnteredFormat(textFormat,horizontalAlignment,"
                                   "verticalAlignment,backgroundColor,wrapStrategy)"}},
         # body: numeric block centred
-        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": TABLE_ROW, "endRowIndex": last,
+        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": TABLE_ROW, "endRowIndex": tot_r,
                                   "startColumnIndex": 4, "endColumnIndex": 1 + NCOL},
                         "cell": {"userEnteredFormat": {"horizontalAlignment": "CENTER"}},
                         "fields": "userEnteredFormat.horizontalAlignment"}},
+        # total row: bold on a light band
+        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": tot_r - 1, "endRowIndex": tot_r,
+                                  "startColumnIndex": 1, "endColumnIndex": 1 + NCOL},
+                        "cell": {"userEnteredFormat": {"textFormat": {"bold": True},
+                                                       "backgroundColor": TILE}},
+                        "fields": "userEnteredFormat(textFormat.bold,backgroundColor)"}},
+        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": TABLE_ROW, "endRowIndex": tot_r,
+                                  "startColumnIndex": 1 + HDRS.index("Aug\nInstalls/day"),
+                                  "endColumnIndex": 1 + COL_POST_IPD},
+                        "cell": {"userEnteredFormat": {"numberFormat": {"type": "NUMBER",
+                                                                        "pattern": "0.00"}}},
+                        "fields": "userEnteredFormat.numberFormat"}},
         {"updateDimensionProperties": {
             "range": {"sheetId": sid, "dimension": "ROWS", "startIndex": 1, "endIndex": 2},
             "properties": {"pixelSize": 34}, "fields": "pixelSize"}},
@@ -377,7 +468,7 @@ def main():
     ]
     widths = {"CSP ID": 88, "CSP Name": 178, "Called": 88, "Active\nBase": 76,
               "Unique\nRecoverable": 90, "Hard\nWinback": 84}
-    for idx, w in enumerate(widths.get(h, 64 if ("Leads" in h or "Installs" in h) else 76)
+    for idx, w in enumerate(widths.get(h, 64 if "Leads" in h else 80 if "Installs" in h else 76)
                             for h in HDRS):
         reqs.append({"updateDimensionProperties": {
             "range": {"sheetId": sid, "dimension": "COLUMNS",
