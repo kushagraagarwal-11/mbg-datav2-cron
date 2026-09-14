@@ -47,7 +47,7 @@ BULK_DATE = dt.date(2026, 9, 8)                 # Non_compliant: done in one go,
 
 ORDER = ["89/KF", "89/Field", "Exit", "Non_compliant", "P6_Fallouts", "750 Opt out",
          "Growth Team", "Ghost Install"]
-CAT2BUCKET = {"Winback _ 89 CSPs": "89", "P2": "89",
+CAT2BUCKET = {"Winback _ 89 CSPs": "89", "P2": "89", "P1/P2": "89",
               "": "89",                        # undated-category rows in the 89 block
               "Exit": "Exit", "P6_Fallouts": "P6_Fallouts",
               "750 opt out": "750 Opt out", "Growth Team": "Growth Team",
@@ -230,15 +230,25 @@ def main():
             trk[g(0)] = {"cat": g(3), "mode": g(4), "date": parse_ddmm(g(2)), "soft": g(8)}
 
     # --- bucket membership: tracker Category wins, then Non_compliant ------------
-    member = {}
+    # Same rule as the sheet's Table 1 formula: ANY tracker category other than
+    # 'Previous Good installers' owns the CSP, so it is never also Non_compliant -- even a
+    # category this script does not know yet (it is then reported, not bucketed).
+    member, owned, unknown = {}, set(), set()
     for csp, t in trk.items():
+        if t["cat"] not in CAT2BUCKET:
+            unknown.add(t["cat"])
+        if t["cat"] != "Previous Good installers":
+            owned.add(csp)
         b = CAT2BUCKET.get(t["cat"])
         if b == "89":
             b = "89/Field" if t["mode"].lower().startswith("visit") else "89/KF"
         if b:
             member[csp] = b
-    for csp in nc:
+    for csp in nc - owned:
         member.setdefault(csp, "Non_compliant")
+    if unknown:
+        print("  WARNING: tracker categories with no dashboard bucket: %r -- add them to "
+              "CAT2BUCKET and the Table 1 formulas" % sorted(unknown))
 
     # --- table 1 ---------------------------------------------------------------
     counts = {b: {} for b in ORDER}
