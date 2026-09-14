@@ -26,11 +26,10 @@ FORMATTING (reviewer, 09-Sep)
 
 SAFETY
   Writes a timestamped JSON backup of the whole T4:AA<last> block before touching it.
-  Aborts if the T3:AA3 headers are not the expected ones (columns moved).
-
-Columns as at 10-Sep-2026 -- RE-VERIFY, reviewer moves them:
-  T Pre Lead · U Pre Asg% · V Post Lead · W Post Asg% · X Pre Tech · Y Pre Inst% ·
-  Z Post Tech · AA Post Inst%          (header row 3, data from row 4)
+  The 8-column block (Pre Lead · Pre Asg% · Post Lead · Post Asg% · Pre Tech · Pre Inst% ·
+  Post Tech · Post Inst%) is FOUND BY ITS HEADERS in row 3 each run -- it was T:AA until
+  14-Sep, U:AB after 'M1 offered' was inserted at L. Aborts if it is not found exactly once or
+  if B / D / J (CSP ID, date, Soft Winback) have moved. Data from row 4.
 """
 import glob
 import json
@@ -38,6 +37,8 @@ import os
 import re
 import sys
 import datetime as dt
+
+import gspread
 
 from winback_common import SHEET_ID, PRE_START, PRE_END, CONN, AGED, mb, gclient
 
@@ -47,8 +48,7 @@ SRC_GID = 0
 BACKUP_DIR = os.environ.get("WINBACK_BACKUP_DIR") or os.path.dirname(os.path.abspath(__file__))
 
 FIRST_DATA_ROW = 4
-COL_T, COL_AA = 20, 27          # 1-based sheet columns
-COL_W, COL_AA_PCT = 23, 27      # cells that get coloured
+# Pre/Post block columns are resolved from header row 3 at run time (they move).
 
 GREEN = {"red": 0.85, "green": 0.94, "blue": 0.85}
 RED = {"red": 0.98, "green": 0.85, "blue": 0.85}
@@ -124,12 +124,22 @@ def main():
     sh = gc.open_by_key(SHEET_ID)
     ws = sh.get_worksheet_by_id(SRC_GID)
 
-    hdr = ws.get_values("T3:AA3")[0]
+    # Locate the 8-column Pre/Post block by its headers -- columns get inserted to the left of
+    # it (14-Sep: 'M1 offered' at L moved it from T:AA to U:AB). Soft Winback and CSP ID must
+    # still be where the row reads below expect them.
+    row3 = [h.strip() for h in ws.get_values("A3:BZ3")[0]]
     expect = ["Pre Lead count", "Pre", "Post Lead count", "Post",
               "Pre Tech assigned count", "Pre", "Post Tech assigned count", "Post"]
-    if [h.strip() for h in hdr] != expect:
-        print("ABORT: T3:AA3 is %r, expected %r -- columns have moved, re-map before running." % (hdr, expect))
+    starts = [i for i in range(len(row3)) if row3[i:i + 8] == expect]
+    if len(starts) != 1 or row3[1] != "CSP ID" or row3[3] != "Date of calling / visit" \
+            or row3[9] != "Soft Winback (Y/N)":
+        print("ABORT: header row 3 is %r -- Pre/Post block not found exactly once, or B/D/J moved."
+              % row3)
         return 1
+    col_t = starts[0] + 1                                  # 1-based first column of the block
+    col_w, col_aa = col_t + 3, col_t + 7                   # the two coloured % columns
+    first_l = gspread.utils.rowcol_to_a1(1, col_t).rstrip("1")
+    last_l = gspread.utils.rowcol_to_a1(1, col_t + 7).rstrip("1")
 
     grid = ws.get_values("B4:AB2000")
     n = len(grid)
@@ -158,10 +168,10 @@ def main():
     post = fetch_post([(t["csp"], t["called"]) for t in targets if t["called"]])
 
     # current block, so untouched rows are rewritten byte-identical
-    block = ws.get_values("T4:AA%d" % (FIRST_DATA_ROW + n - 1))
+    block = ws.get_values("%s4:%s%d" % (first_l, last_l, FIRST_DATA_ROW + n - 1))
     block = [(row + [""] * 8)[:8] for row in block] + [[""] * 8] * (n - len(block))
 
-    backup = {"taken": dt.datetime.now().isoformat(), "range": "T4:AA%d" % (FIRST_DATA_ROW + n - 1),
+    backup = {"taken": dt.datetime.now().isoformat(), "range": "%s4:%s%d" % (first_l, last_l, FIRST_DATA_ROW + n - 1),
               "values": block}
     bpath = os.path.join(BACKUP_DIR, "maintab_TAA_backup_%s.json"
                          % dt.datetime.now().strftime("%Y%m%d_%H%M%S"))
@@ -202,20 +212,20 @@ def main():
             elif b < a:
                 colours.append((t["row"], col, RED))
 
-        band(pre_asg, post_asg, COL_W)
-        band(pre_ins, post_ins, COL_AA_PCT)
+        band(pre_asg, post_asg, col_w)
+        band(pre_ins, post_ins, col_aa)
 
     # soft-winback rows: Pre/Post now lives on the 'Pre/Post Winback' tab, so clear it here
     for idx in soft_idx:
         block[idx] = [""] * 8
 
     last = FIRST_DATA_ROW + n - 1
-    ws.update(values=block, range_name="T4:AA%d" % last, value_input_option="RAW")
+    ws.update(values=block, range_name="%s4:%s%d" % (first_l, last_l, last), value_input_option="RAW")
 
     # one uniform look for the whole block: centred, so ints and "-" line up
     reqs = [{"repeatCell": {
         "range": {"sheetId": ws.id, "startRowIndex": FIRST_DATA_ROW - 1, "endRowIndex": last,
-                  "startColumnIndex": COL_T - 1, "endColumnIndex": COL_AA},
+                  "startColumnIndex": col_t - 1, "endColumnIndex": col_t + 7},
         "cell": {"userEnteredFormat": {"horizontalAlignment": "CENTER",
                                        "backgroundColor": {"red": 1, "green": 1, "blue": 1}}},
         "fields": "userEnteredFormat(horizontalAlignment,backgroundColor)"}}]

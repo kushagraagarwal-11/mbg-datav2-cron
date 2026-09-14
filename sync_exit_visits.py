@@ -8,11 +8,11 @@ SCOPE -- only tracker rows that are VISITED, not called:
   Rows the K/F team CALLED keep their calling date even if the CSP also appears in the visit
   sheet (reviewer, 14-Sep: "visiting and exit u have to take dates from this sheet").
 
-Writes, per matching row:
-    D  Date of calling / visit   <- Date of Visit      (overwritten -- the visit sheet owns it)
-    J  Soft Winback (Y/N)        <- Soft Winback (Y/N) (normalised to Y / N)
-    K  CI(m1)                    <- CI(m1)             (only when the tracker cell is blank)
-    L  750                       <- 750                (only when the tracker cell is blank)
+Writes, per matching row (tracker columns found by header name in row 3 -- they move):
+    Date of calling / visit   <- Date of Visit      (overwritten -- the visit sheet owns it)
+    Soft Winback (Y/N)        <- Soft Winback (Y/N) (normalised to Y / N)
+    CI(m1)                    <- CI(m1)             (only when the tracker cell is blank)
+    750                       <- 750                (only when the tracker cell is blank)
 
 DATES
   The visit sheet mixes formats: '09th Sep', '14 Sep', '10-09-26' (day first) and '09-13-26'
@@ -24,9 +24,10 @@ DATES
 SAFETY
   * Never blanks a tracker cell: an empty source value writes nothing.
   * Only touches rows whose CSP ID is already in the tracker; never adds rows.
-  * Never touches column G (reviewer's XLOOKUP formulas) -- writes D and J:L only.
+  * Writes only the four columns above, located by header; aborts if any header is missing or
+    duplicated. Formula columns (G Unique Recoverable, 'M1 offered') are never written.
   * If the visit sheet cannot be read, aborts without writing (no stale fallback).
-  * Backs up D/J/K/L to JSON before writing; reports every change.
+  * Backs up the four columns to JSON before writing; reports every change.
 """
 import glob
 import json
@@ -35,11 +36,13 @@ import re
 import sys
 import datetime as dt
 
+import gspread
+
 from winback_common import SHEET_ID, IST, gclient
 
 SOURCE_SHEET = "1WsADMo2slH0VZhCdBbAg2ortl6_AfTs-hSBvTBEoRto"   # Willing to Exit CSPs
 BACKUP_DIR = os.environ.get("WINBACK_BACKUP_DIR") or os.path.dirname(os.path.abspath(__file__))
-COLS = {"visit": "D", "soft": "J", "ci": "K", "opt750": "L"}
+# tracker columns are resolved from header row 3 at run time (they move)
 FIRST_DATA_ROW = 4
 YEAR = 2026
 MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
@@ -115,30 +118,37 @@ def main():
     print("  visit sheet: %d CSPs" % len(src))
 
     ws = gc.open_by_key(SHEET_ID).get_worksheet_by_id(0)
-    h = ws.get_values("D3:L3")[0]
-    if (h[0].strip() != "Date of calling / visit" or h[6].strip() != "Soft Winback (Y/N)"
-            or h[7].strip() != "CI(m1)" or h[8].strip() != "750"):
-        print("ABORT: tracker D3:L3 is %r -- columns moved." % h)
-        return 1
-    if ws.get_values("E3:F3")[0] != ["Category", "Winback and Visiting"]:
-        print("ABORT: tracker E3:F3 is %r -- columns moved." % ws.get_values("E3:F3")[0])
-        return 1
+    # Resolve every column by its header in row 3 -- columns get inserted (14-Sep: 'M1 offered'
+    # went in at L and pushed '750' to M; a fixed letter would have written into a formula).
+    row3 = [c.strip() for c in ws.get_values("A3:BZ3")[0]]
+    need = {"csp": "CSP ID", "visit": "Date of calling / visit", "cat": "Category",
+            "mode": "Winback and Visiting", "soft": "Soft Winback (Y/N)", "ci": "CI(m1)",
+            "opt750": "750"}
+    pos = {}
+    for key, label in need.items():
+        hits = [i for i, c in enumerate(row3) if c == label]
+        if len(hits) != 1:
+            print("ABORT: tracker header %r found %d times in row 3 -- %r" % (label, len(hits), row3))
+            return 1
+        pos[key] = hits[0]                    # 0-based sheet column
+    col_letter = {k: gspread.utils.rowcol_to_a1(1, pos[k] + 1).rstrip("1")
+                  for k in ("visit", "soft", "ci", "opt750")}
 
-    grid = ws.get_values("B4:L2000")
-    n = len(grid)
+    rows = ws.get_values("A4:%s2000" % gspread.utils.rowcol_to_a1(1, max(pos.values()) + 1).rstrip("1"))
+    n = len(rows)
 
-    def g(r, i):
+    def g(r, key):
+        i = pos[key]
         return r[i].strip() if len(r) > i else ""
 
-    cur = {"visit": [[g(r, 2)] for r in grid], "soft": [[g(r, 8)] for r in grid],
-           "ci": [[g(r, 9)] for r in grid], "opt750": [[g(r, 10)] for r in grid]}
+    cur = {k: [[g(r, k)] for r in rows] for k in ("visit", "soft", "ci", "opt750")}
 
     changes, in_scope = [], 0
-    for idx, r in enumerate(grid):
-        csp = g(r, 0)
+    for idx, r in enumerate(rows):
+        csp = g(r, "csp")
         if not csp or csp not in src:
             continue
-        if not (g(r, 3) == "Exit" or g(r, 4).lower().startswith("visit")):
+        if not (g(r, "cat") == "Exit" or g(r, "mode").lower().startswith("visit")):
             continue                          # called by K/F -- keep the calling date
         in_scope += 1
         s = src[csp]
@@ -165,8 +175,8 @@ def main():
     bpath = os.path.join(BACKUP_DIR, "exitsync_backup_%s.json" % dt.datetime.now().strftime("%Y%m%d_%H%M%S"))
     with open(bpath, "w", encoding="utf-8") as fh:
         json.dump({"taken": dt.datetime.now().isoformat(), "rows": n,
-                   "values": {k: [[g(r, i)] for r in grid] for k, i in
-                              (("visit", 2), ("soft", 8), ("ci", 9), ("opt750", 10))}}, fh, indent=1)
+                   "columns": col_letter,
+                   "values": {k: [[g(r, k)] for r in rows] for k in col_letter}}, fh, indent=1)
     for stale in sorted(glob.glob(os.path.join(BACKUP_DIR, "exitsync_backup_*.json")))[:-30]:
         try:
             os.remove(stale)
@@ -174,7 +184,7 @@ def main():
             pass
 
     # write only the cells that changed -- other columns and rows are left untouched
-    ws.batch_update([{"range": "%s%d" % (COLS[key], row), "values": [[now]]}
+    ws.batch_update([{"range": "%s%d" % (col_letter[key], row), "values": [[now]]}
                      for row, csp, key, was, now in changes], value_input_option="RAW")
 
     for row, csp, key, was, now in changes:
