@@ -290,10 +290,16 @@ def main():
         if hard == "Yes":                      # green flag on the verdict itself
             colours.append((rown, COL_HARD, GREEN))
 
-    # TOTAL row -- sums for counts; everything else pooled (sum of numerators / sum of
-    # denominators), never an average of the per-CSP averages.
-    t_aug = per_day(agg["aug"], agg["aug_days"])            # installs per CSP per day
-    t_post = per_day(agg["pinst"], agg["pdays"])
+    # TOTAL row -- counts summed; % columns pooled (sum of numerators / sum of denominators),
+    # never an average of the per-CSP rates. Installs/day = SUM of the rows above (user,
+    # 14-Sep: "do total of 21 to 87") -> the cohort's installs per day; written as a live
+    # =SUM formula over the body rows.
+    first_b, last_b = TABLE_ROW + 1, TABLE_ROW + len(body)
+    ipd_col = lambda h: gspread.utils.rowcol_to_a1(1, 2 + HDRS.index(h)).rstrip("1")
+    f_aug = "=SUM(%s%d:%s%d)" % (ipd_col("Aug\nInstalls/day"), first_b, ipd_col("Aug\nInstalls/day"), last_b)
+    f_post = "=SUM(%s%d:%s%d)" % (ipd_col("Post\nInstalls/day"), first_b, ipd_col("Post\nInstalls/day"), last_b)
+    t_aug = round(sum(b[7] for b in body if b[7] != "-"), 2)
+    t_post = round(sum(b[8] for b in body if b[8] != "-"), 2)
     total = ["Total", "%d CSPs" % len(rows), "-", active_total, recov_total,
              agg["pl"], agg["ql"], t_aug, t_post,
              pct(agg["pa"], agg["pl"]), pct(agg["qa"], agg["ql"]),
@@ -336,7 +342,8 @@ def main():
                  if remap(s["dimensionIndex"]) is not None],
                 [dict(f, columnIndex=remap(f["columnIndex"])) for f in bf.get("filterSpecs", [])
                  if remap(f["columnIndex"]) is not None])
-        sh.batch_update({"requests": [{"clearBasicFilter": {"sheetId": ws.id}}]})
+        # NOT cleared here: if the run fails later the reviewer's filter must survive.
+        # setBasicFilter at the end replaces it in one step.
     ws.clear()
     # ws.clear() wipes VALUES ONLY -- old backgrounds/merges survive and pile up run to run.
     # Reset the whole canvas first, otherwise last run's red/green lands in the KPI area.
@@ -392,11 +399,16 @@ def main():
                        "%dh ago (%s leads), so a CSP called in the last 2 days shows no Post yet. "
                        "Rates are comparable, but Post sits on small denominators. Installs/day: "
                        "Aug = August installs / 31; Post = installs from the call date to yesterday / "
-                       "days since the call. Total row = sums, or pooled (sum / sum), never an "
-                       "average of averages."
+                       "days since the call. Total row: counts and installs/day are sums of the "
+                       "rows; %% columns are pooled (sum / sum), never an average of averages."
                        % ("{:,}".format(agg["pl"]), AGING_HOURS, "{:,}".format(agg["ql"])))
 
     ws.update(values=grid + [HDRS] + body + [total], range_name="B2", value_input_option="RAW")
+    # the two installs/day totals as live SUM formulas over the body rows
+    ws.update(values=[[f_aug, f_post]],
+              range_name="%s%d:%s%d" % (ipd_col("Aug\nInstalls/day"), total_row,
+                                        ipd_col("Post\nInstalls/day"), total_row),
+              value_input_option="USER_ENTERED")
 
     sid = ws.id
     last = TABLE_ROW + len(body)          # last body row -- the filter stops here
