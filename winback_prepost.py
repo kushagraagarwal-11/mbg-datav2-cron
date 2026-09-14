@@ -326,7 +326,7 @@ def main():
         {"updateSheetProperties": {
             "properties": {"sheetId": sid,
                            "gridProperties": {"hideGridlines": True,
-                                              "frozenRowCount": TABLE_ROW,
+                                              "frozenRowCount": 0,          # no freeze -- user asked 14-Sep
                                               "frozenColumnCount": 0}},
             "fields": "gridProperties(hideGridlines,frozenRowCount,frozenColumnCount)"}},
         # title + subtitle
