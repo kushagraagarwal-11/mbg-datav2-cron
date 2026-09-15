@@ -2,10 +2,13 @@ name: Sehat MG Payout 16Aug-15Sep (nightly 12am IST)
 
 on:
   schedule:
-    # 18:30 UTC = 00:00 IST. Rebuilds the "Sehat MG Payout (16Aug-15Sep)" tab so it
-    # stays current as the SLA complaint-ledger settles and FPV investigations resolve
-    # (confirmed-FPV CSPs are excluded to Rs0). Runs on GitHub's cloud — laptop can be off.
+    # 18:30 UTC = 00:00 IST (primary) + 19:30 UTC = 01:00 IST (backup, in case GitHub's
+    # scheduler skips the midnight slot under load). Rebuilds the "Sehat MG Payout
+    # (16Aug-15Sep)" tab so it stays current as the SLA complaint-ledger settles and FPV
+    # investigations resolve (confirmed-FPV CSPs excluded to Rs0). Runs on GitHub's cloud
+    # — laptop can be off. Idempotent (full clear + rewrite), so a double run is harmless.
     - cron: "30 18 * * *"
+    - cron: "30 19 * * *"
   workflow_dispatch: {}
 
 jobs:
