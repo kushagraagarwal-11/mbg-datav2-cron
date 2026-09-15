@@ -19,7 +19,8 @@ STAGES (nested -- each stage is a subset of the one above)
                            history version with STATUS = FULFILLED
   5  Installed after delivery   >=1 install completed at/after the CSP's first delivery
   Per stage also: active base (latest Quality OS snapshot), installs 25-31 Aug (last week of
-  August) and installs since 8 Sep -- summed over that stage's CSPs.
+  August) and installs since 8 Sep -- summed over that stage's CSPs -- each with a per-day
+  average: Aug / 7; since 8 Sep / exact days elapsed since 8 Sep 00:00 IST (count runs to now).
 
 INSTALLS  PROD_DB.DBT_CSP.FACT_INSTALL_CANDIDATES, all row versions, attributed to the installing
           CSP; completed-at = INSTALLATION_COMPLETED_AT, else first version showing the install.
@@ -199,7 +200,9 @@ def main():
          "%d installs after delivery" % vol["inst_after"]),
     ]
     now = dt.datetime.now(IST)
-    days_since = (now.date() - START).days + 1              # 8 Sep .. today, today partial
+    # installs since 8 Sep run up to NOW, so their per-day average divides by the exact time
+    # elapsed since 8 Sep 00:00 IST (e.g. 8.7 days), not a whole-day count
+    days_since = (now - start_dt).total_seconds() / 86400.0
 
     ws.clear()
     wipe = {"sheetId": ws.id, "startRowIndex": 0, "endRowIndex": max(ws.row_count, 200),
@@ -211,18 +214,23 @@ def main():
             "textFormat": {"bold": False, "fontSize": 10, "foregroundColor": {"red": 0, "green": 0, "blue": 0}}}},
             "fields": "userEnteredFormat(backgroundColor,horizontalAlignment,textFormat)"}}]})
 
-    top = [[""] * 10 for _ in range(TABLE_HDR_ROW - 2)]
+    top = [[""] * 12 for _ in range(TABLE_HDR_ROW - 2)]
     top[0][0] = "NETBOX ORDER FUNNEL  ·  since 8 Sep 2026"
     top[1][0] = ("%d CSPs · eligible = app ordering switch ON (other eligibility gates are not stored "
                  "in the warehouse) · each stage is a subset of the one above · installs by completion "
                  "date · refreshed %s IST" % (n, now.strftime("%d %b %Y, %H:%M")))
     top[3] = ["Stage", "", "CSPs", "% of list", "% of previous", "Funnel", "Active base",
-              "Installs 25-31 Aug\n(7 days)", "Installs since 8 Sep\n(%d days)" % days_since, "Volume"]
+              "Installs 25-31 Aug\n(7 days)", "Per day\n(Aug)",
+              "Installs since 8 Sep\n(%.1f days)" % days_since, "Per day\n(since 8 Sep)", "Volume"]
+    ipd_colours = []
     for i, (lab, cnt, v) in enumerate(stages):
         prev = stages[i - 1][1] if i else None
         ab, ia, i8 = sums(groups[i])
+        a_pd, s_pd = round(ia / 7.0, 1), round(i8 / days_since, 1)
         top[4 + i] = [lab, "", cnt, pct(cnt, n), pct(cnt, prev) if prev is not None else "-", "",
-                      ab, ia, i8, v]
+                      ab, ia, a_pd, i8, s_pd, v]
+        if s_pd != a_pd:
+            ipd_colours.append((5 + i, s_pd > a_pd))
     ws.update(values=top, range_name="B2", value_input_option="RAW")
     ws.update(values=[HDRS] + body, range_name="B%d" % TABLE_HDR_ROW, value_input_option="RAW")
     # funnel bars: in-cell bar sized to the stage's share of the list
@@ -246,14 +254,14 @@ def main():
                         "cell": {"userEnteredFormat": {"textFormat": {"fontSize": 9, "foregroundColor": MUTED}}},
                         "fields": "userEnteredFormat.textFormat"}},
         {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 4, "endRowIndex": 5,
-                                  "startColumnIndex": 1, "endColumnIndex": 11},
+                                  "startColumnIndex": 1, "endColumnIndex": 13},
                         "cell": {"userEnteredFormat": {"textFormat": {"bold": True, "foregroundColor": WHITE},
                                                        "backgroundColor": HDR, "horizontalAlignment": "CENTER",
                                                        "verticalAlignment": "MIDDLE", "wrapStrategy": "WRAP"}},
                         "fields": "userEnteredFormat(textFormat,backgroundColor,horizontalAlignment,"
                                   "verticalAlignment,wrapStrategy)"}},
         {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 5, "endRowIndex": 5 + len(stages),
-                                  "startColumnIndex": 1, "endColumnIndex": 11},
+                                  "startColumnIndex": 1, "endColumnIndex": 13},
                         "cell": {"userEnteredFormat": {"backgroundColor": TILE}},
                         "fields": "userEnteredFormat.backgroundColor"}},
         {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 5, "endRowIndex": 5 + len(stages),
@@ -262,7 +270,7 @@ def main():
                                                        "textFormat": {"bold": True}}},
                         "fields": "userEnteredFormat(horizontalAlignment,textFormat.bold)"}},
         {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 5, "endRowIndex": 5 + len(stages),
-                                  "startColumnIndex": 7, "endColumnIndex": 10},
+                                  "startColumnIndex": 7, "endColumnIndex": 12},
                         "cell": {"userEnteredFormat": {"horizontalAlignment": "CENTER"}},
                         "fields": "userEnteredFormat.horizontalAlignment"}},
         {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": TABLE_HDR_ROW - 1, "endRowIndex": TABLE_HDR_ROW,
@@ -295,6 +303,19 @@ def main():
     reqs.append({"updateDimensionProperties": {
         "range": {"sheetId": sid, "dimension": "ROWS", "startIndex": 4, "endIndex": 5},
         "properties": {"pixelSize": 36}, "fields": "pixelSize"}})
+    for col in (9, 11):                                 # per-day columns: always one decimal
+        reqs.append({"repeatCell": {
+            "range": {"sheetId": sid, "startRowIndex": 5, "endRowIndex": 5 + len(stages),
+                      "startColumnIndex": col, "endColumnIndex": col + 1},
+            "cell": {"userEnteredFormat": {"numberFormat": {"type": "NUMBER", "pattern": "0.0"}}},
+            "fields": "userEnteredFormat.numberFormat"}})
+    for r0, up in ipd_colours:                          # per day since 8 Sep vs Aug
+        reqs.append({"repeatCell": {
+            "range": {"sheetId": sid, "startRowIndex": r0, "endRowIndex": r0 + 1,
+                      "startColumnIndex": 11, "endColumnIndex": 12},
+            "cell": {"userEnteredFormat": {"backgroundColor": {"red": 0.80, "green": 0.92, "blue": 0.82}
+                                           if up else {"red": 0.98, "green": 0.83, "blue": 0.83}}},
+            "fields": "userEnteredFormat.backgroundColor"}})
     sh.batch_update({"requests": reqs})
 
     print("netbox funnel: %s | vol %s" % ([(s[0], s[1]) for s in stages], vol))
