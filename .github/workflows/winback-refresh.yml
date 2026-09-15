@@ -1,12 +1,12 @@
-name: P1/P2 Winbacks — Pre/Post, main tab T:AA, Daily Dashboard (every 2h)
+name: P1/P2 Winbacks — Pre/Post, main tab, Daily Dashboard, Netbox funnel (every 20 min)
 
 on:
   schedule:
-    # every 2 hours at :53 UTC = 20:23, 22:23 ... IST; the laptop backup runs 19:13, 21:13 ... IST.
-    # Moved from :43 on 14-Sep: that schedule never fired once in 8h (only manual runs did).
+    # every 20 min at :05/:25/:45 (user, 15-Sep: "refresh every 15-20 mins"); the laptop backup
+    # runs at :15/:35/:55. GitHub delays/skips scheduled runs, so real cadence here is looser.
     # Replaces the laptop task WiomWinbackPrePost, which failed ~1 run in 3 on connection
     # resets and only ran while the laptop was on.
-    - cron: "53 */2 * * *"
+    - cron: "5,25,45 * * * *"
   workflow_dispatch: {}
 
 # a slow run must never overlap the next one -- winback_prepost.py clears its tab first
@@ -52,3 +52,7 @@ jobs:
       - name: Daily Dashboard
         if: always()
         run: python daily_dashboard.py || (sleep 90 && python daily_dashboard.py)
+
+      - name: Netbox Order Funnel tab
+        if: always()
+        run: python netbox_funnel.py || (sleep 60 && python netbox_funnel.py)
