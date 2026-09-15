@@ -1,0 +1,24 @@
+name: Sehat MG Payout 16Aug-15Sep (nightly 12am IST)
+
+on:
+  schedule:
+    # 18:30 UTC = 00:00 IST. Rebuilds the "Sehat MG Payout (16Aug-15Sep)" tab so it
+    # stays current as the SLA complaint-ledger settles and FPV investigations resolve
+    # (confirmed-FPV CSPs are excluded to Rs0). Runs on GitHub's cloud — laptop can be off.
+    - cron: "30 18 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - name: Rebuild Sehat MG Sep payout (FPV-excluded)
+        env:
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+        run: python sehat_sep_payout.py
