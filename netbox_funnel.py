@@ -18,6 +18,8 @@ STAGES (nested -- each stage is a subset of the one above)
   4  Order delivered       >=1 of those requests reached FULFILLED; delivered-at = the first
                            history version with STATUS = FULFILLED
   5  Installed after delivery   >=1 install completed at/after the CSP's first delivery
+  Per stage also: active base (latest Quality OS snapshot), installs 25-31 Aug (last week of
+  August) and installs since 8 Sep -- summed over that stage's CSPs.
 
 INSTALLS  PROD_DB.DBT_CSP.FACT_INSTALL_CANDIDATES, all row versions, attributed to the installing
           CSP; completed-at = INSTALLATION_COMPLETED_AT, else first version showing the install.
@@ -34,10 +36,11 @@ TAB = "Netbox Order Funnel"
 START = dt.date(2026, 9, 8)
 START_TS = "'2026-09-08 00:00:00 +05:30'::TIMESTAMP_TZ"
 TABLE_HDR_ROW = 14                      # per-CSP header row; CSP IDs from the row below
-HDRS = ["CSP ID", "CSP Name", "Eligible to\norder", "Orders placed\nsince 8 Sep",
+AUG_START, AUG_END = dt.date(2026, 8, 25), dt.date(2026, 8, 31)     # last week of August
+HDRS = ["CSP ID", "CSP Name", "Active\nbase", "Eligible to\norder", "Orders placed\nsince 8 Sep",
         "Devices\nrequested", "Orders\ndelivered", "Devices\ndelivered", "First\ndelivered on",
-        "Installs\nsince 8 Sep", "Installs after\ndelivery", "Netboxes\nin hand now",
-        "Latest order\nstatus"]
+        "Installs\n25-31 Aug", "Installs\nsince 8 Sep", "Installs after\ndelivery",
+        "Netboxes\nin hand now", "Latest order\nstatus"]
 
 INK = {"red": 0.09, "green": 0.24, "blue": 0.20}
 MUTED = {"red": 0.42, "green": 0.46, "blue": 0.45}
@@ -57,7 +60,7 @@ def q(ids):
 
 
 def fetch(ids):
-    names, allowed, orders, installs, netbox = {}, {}, {}, {}, {}
+    names, allowed, orders, installs, netbox, active = {}, {}, {}, {}, {}, {}
     for c in chunks(ids):
         for r in mb("SELECT CSP_ID, MAX(PARTNER_NAME) FROM PROD_DB.DBT_CSP.DIM_CSP "
                     "WHERE ETL_CURRENT AND CSP_ID IN ('%s') GROUP BY 1" % q(c)):
@@ -94,8 +97,18 @@ def fetch(ids):
             WHERE CSP_ID IN ('%s')
               AND (OTP_VERIFIED_FLAG OR INSTALLATION_COMPLETED_AT IS NOT NULL OR COMPLETED_STEP>=7)
             GROUP BY 1, 2)
-          SELECT CSP_ID, done_at FROM v WHERE done_at >= %s""" % (q(c), START_TS)):
+          SELECT CSP_ID, done_at FROM v
+          WHERE done_at >= '2026-08-25 00:00:00 +05:30'::TIMESTAMP_TZ""" % q(c)):
             installs.setdefault(r[0], []).append(ts(r[1]))
+        # active base = ACTIVE_CONNECTION_COUNT on the latest Quality OS snapshot
+        for r in mb("""
+          SELECT CSP_ID, ACTIVE_CONNECTION_COUNT
+          FROM PROD_DB.CSP_QUALITY_SERVICE_CSP_QUALITY_SERVICE.DAILY_METRIC_SNAPSHOTS
+          WHERE _FIVETRAN_ACTIVE AND CSP_ID IN ('%s')
+            AND SNAPSHOT_DATE = (SELECT MAX(SNAPSHOT_DATE)
+                FROM PROD_DB.CSP_QUALITY_SERVICE_CSP_QUALITY_SERVICE.DAILY_METRIC_SNAPSHOTS
+                WHERE _FIVETRAN_ACTIVE)""" % q(c)):
+            active[r[0]] = int(r[1] or 0)
         for r in mb("""
           SELECT CSP_ID, COUNT(*)
           FROM PROD_DB.CSP_ASSET_CUSTODY_SERVICE_CSP_ASSET_CUSTODY_SERVICE.NETBOX_CUSTODY
@@ -103,7 +116,7 @@ def fetch(ids):
             AND STATUS IN ('CUSTODIED','IDLE','RETRIEVAL_PENDING')
           GROUP BY 1""" % q(c)):
             netbox[r[0]] = int(r[1] or 0)
-    return names, allowed, orders, installs, netbox
+    return names, allowed, orders, installs, netbox, active
 
 
 def ts(v):
@@ -137,15 +150,18 @@ def main():
         print("ABORT: no CSP IDs in column B below row %d" % TABLE_HDR_ROW)
         return 1
 
-    names, allowed, orders, installs, netbox = fetch(ids)
+    names, allowed, orders, installs, netbox, active = fetch(ids)
+    start_dt = dt.datetime(2026, 9, 8, tzinfo=IST)
 
-    body, st = [], {"elig": set(), "placed": set(), "deliv": set(), "inst": set()}
+    body, per, st = [], {}, {"elig": set(), "placed": set(), "deliv": set(), "inst": set()}
     vol = dict(orders=0, req=0, deliv_orders=0, deliv_dev=0, inst_all=0, inst_after=0)
     for c in ids:
         o = orders.get(c, [])
         deliv = [x for x in o if x["status"] == "FULFILLED"]
         first_deliv = min((x["delivered"] for x in deliv if x["delivered"]), default=None)
-        ins = installs.get(c, [])
+        all_ins = installs.get(c, [])
+        aug = [t for t in all_ins if AUG_START <= t.astimezone(IST).date() <= AUG_END]
+        ins = [t for t in all_ins if t >= start_dt]                 # since 8 Sep
         after = [t for t in ins if first_deliv and t >= first_deliv]
         latest = max(o, key=lambda x: x["created"])["status"] if o else "-"
         el = allowed.get(c, False)
@@ -160,12 +176,18 @@ def main():
         vol["orders"] += len(o); vol["req"] += sum(x["req"] for x in o)
         vol["deliv_orders"] += len(deliv); vol["deliv_dev"] += sum(x["appr"] for x in deliv)
         vol["inst_all"] += len(ins); vol["inst_after"] += len(after)
-        body.append([c, names.get(c, ""), "Yes" if el else "No", len(o),
+        per[c] = (active.get(c, 0), len(aug), len(ins))
+        body.append([c, names.get(c, ""), active.get(c, 0), "Yes" if el else "No", len(o),
                      sum(x["req"] for x in o), len(deliv), sum(x["appr"] for x in deliv),
                      first_deliv.astimezone(IST).strftime("%d %b") if first_deliv else "-",
-                     len(ins), len(after) if first_deliv else "-", netbox.get(c, 0), latest])
+                     len(aug), len(ins), len(after) if first_deliv else "-", netbox.get(c, 0), latest])
 
     n = len(ids)
+    groups = [set(ids), st["elig"], st["placed"], st["deliv"], st["inst"]]
+
+    def sums(g):                      # active base, installs 25-31 Aug, installs since 8 Sep
+        return tuple(sum(per[c][k] for c in g) for k in range(3))
+
     stages = [
         ("CSPs in the list", n, ""),
         ("Eligible to order (ordering switch ON)", len(st["elig"]), ""),
@@ -177,6 +199,7 @@ def main():
          "%d installs after delivery" % vol["inst_after"]),
     ]
     now = dt.datetime.now(IST)
+    days_since = (now.date() - START).days + 1              # 8 Sep .. today, today partial
 
     ws.clear()
     wipe = {"sheetId": ws.id, "startRowIndex": 0, "endRowIndex": max(ws.row_count, 200),
@@ -188,17 +211,18 @@ def main():
             "textFormat": {"bold": False, "fontSize": 10, "foregroundColor": {"red": 0, "green": 0, "blue": 0}}}},
             "fields": "userEnteredFormat(backgroundColor,horizontalAlignment,textFormat)"}}]})
 
-    top = [[""] * 7 for _ in range(TABLE_HDR_ROW - 2)]
+    top = [[""] * 10 for _ in range(TABLE_HDR_ROW - 2)]
     top[0][0] = "NETBOX ORDER FUNNEL  ·  since 8 Sep 2026"
     top[1][0] = ("%d CSPs · eligible = app ordering switch ON (other eligibility gates are not stored "
-                 "in the warehouse) · each stage is a subset of the one above · refreshed %s IST"
-                 % (n, now.strftime("%d %b %Y, %H:%M")))
-    top[3] = ["Stage", "", "CSPs", "% of list", "% of previous", "Funnel", "Volume"]
+                 "in the warehouse) · each stage is a subset of the one above · installs by completion "
+                 "date · refreshed %s IST" % (n, now.strftime("%d %b %Y, %H:%M")))
+    top[3] = ["Stage", "", "CSPs", "% of list", "% of previous", "Funnel", "Active base",
+              "Installs 25-31 Aug\n(7 days)", "Installs since 8 Sep\n(%d days)" % days_since, "Volume"]
     for i, (lab, cnt, v) in enumerate(stages):
         prev = stages[i - 1][1] if i else None
-        top[4 + i] = [lab, "", cnt, pct(cnt, n), pct(cnt, prev) if prev is not None else "-", "", v]
-    top[10][0] = ("All %d CSPs together: %d installs since 8 Sep (incl. CSPs that did not order)."
-                  % (n, vol["inst_all"]))
+        ab, ia, i8 = sums(groups[i])
+        top[4 + i] = [lab, "", cnt, pct(cnt, n), pct(cnt, prev) if prev is not None else "-", "",
+                      ab, ia, i8, v]
     ws.update(values=top, range_name="B2", value_input_option="RAW")
     ws.update(values=[HDRS] + body, range_name="B%d" % TABLE_HDR_ROW, value_input_option="RAW")
     # funnel bars: in-cell bar sized to the stage's share of the list
@@ -222,12 +246,14 @@ def main():
                         "cell": {"userEnteredFormat": {"textFormat": {"fontSize": 9, "foregroundColor": MUTED}}},
                         "fields": "userEnteredFormat.textFormat"}},
         {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 4, "endRowIndex": 5,
-                                  "startColumnIndex": 1, "endColumnIndex": 8},
+                                  "startColumnIndex": 1, "endColumnIndex": 11},
                         "cell": {"userEnteredFormat": {"textFormat": {"bold": True, "foregroundColor": WHITE},
-                                                       "backgroundColor": HDR, "horizontalAlignment": "CENTER"}},
-                        "fields": "userEnteredFormat(textFormat,backgroundColor,horizontalAlignment)"}},
+                                                       "backgroundColor": HDR, "horizontalAlignment": "CENTER",
+                                                       "verticalAlignment": "MIDDLE", "wrapStrategy": "WRAP"}},
+                        "fields": "userEnteredFormat(textFormat,backgroundColor,horizontalAlignment,"
+                                  "verticalAlignment,wrapStrategy)"}},
         {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 5, "endRowIndex": 5 + len(stages),
-                                  "startColumnIndex": 1, "endColumnIndex": 8},
+                                  "startColumnIndex": 1, "endColumnIndex": 11},
                         "cell": {"userEnteredFormat": {"backgroundColor": TILE}},
                         "fields": "userEnteredFormat.backgroundColor"}},
         {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 5, "endRowIndex": 5 + len(stages),
@@ -235,10 +261,10 @@ def main():
                         "cell": {"userEnteredFormat": {"horizontalAlignment": "CENTER",
                                                        "textFormat": {"bold": True}}},
                         "fields": "userEnteredFormat(horizontalAlignment,textFormat.bold)"}},
-        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 11, "endRowIndex": 12,
-                                  "startColumnIndex": 1, "endColumnIndex": 2},
-                        "cell": {"userEnteredFormat": {"textFormat": {"fontSize": 9, "foregroundColor": MUTED}}},
-                        "fields": "userEnteredFormat.textFormat"}},
+        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 5, "endRowIndex": 5 + len(stages),
+                                  "startColumnIndex": 7, "endColumnIndex": 10},
+                        "cell": {"userEnteredFormat": {"horizontalAlignment": "CENTER"}},
+                        "fields": "userEnteredFormat.horizontalAlignment"}},
         {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": TABLE_HDR_ROW - 1, "endRowIndex": TABLE_HDR_ROW,
                                   "startColumnIndex": 1, "endColumnIndex": 1 + len(HDRS)},
                         "cell": {"userEnteredFormat": {"textFormat": {"bold": True, "fontSize": 9,
@@ -259,13 +285,16 @@ def main():
     reqs.append({"mergeCells": {"range": {"sheetId": sid, "startRowIndex": 4, "endRowIndex": 5,
                                           "startColumnIndex": 1, "endColumnIndex": 3},
                                 "mergeType": "MERGE_ALL"}})
-    for idx, w in enumerate([80, 190, 80, 90, 80, 80, 80, 80, 80, 90, 80, 100]):
+    for idx, w in enumerate([80, 190, 80, 80, 90, 110, 110, 130, 80, 90, 90, 90, 80, 100]):
         reqs.append({"updateDimensionProperties": {
             "range": {"sheetId": sid, "dimension": "COLUMNS", "startIndex": 1 + idx, "endIndex": 2 + idx},
             "properties": {"pixelSize": w}, "fields": "pixelSize"}})
     reqs.append({"updateDimensionProperties": {
         "range": {"sheetId": sid, "dimension": "COLUMNS", "startIndex": 6, "endIndex": 7},
         "properties": {"pixelSize": 170}, "fields": "pixelSize"}})
+    reqs.append({"updateDimensionProperties": {
+        "range": {"sheetId": sid, "dimension": "ROWS", "startIndex": 4, "endIndex": 5},
+        "properties": {"pixelSize": 36}, "fields": "pixelSize"}})
     sh.batch_update({"requests": reqs})
 
     print("netbox funnel: %s | vol %s" % ([(s[0], s[1]) for s in stages], vol))

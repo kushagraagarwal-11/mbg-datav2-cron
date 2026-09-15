@@ -26,15 +26,11 @@ TABLE 1  per bucket: D = total, E.. = per date      *** FORMULA-DRIVEN IN THE SH
 TABLE 2  per bucket, pooled (sum numerators / sum denominators)
   D/E  B2A % pre/post     bookings offered -> technician assigned
   F/G  A2I % pre/post     assigned -> installed
-  H    Order applied   (post)   % of called CSPs that placed a device order since the call
-  I    Order delivered (post)   % of called CSPs with such an order FULFILLED
-  J/K  % of CSPs with netbox  J = holding >=1 at 00:00 IST on the call date (history), K = now
-  L/M  B2A % pre/post  } for ONLY the CSPs that applied for devices since the call
-  N/O  A2I % pre/post  }   (user, 14-Sep: did ordering devices go with a funnel move?)
+  (order applied / delivered, netbox and applied-CSP columns moved to the Netbox Order
+   Funnel tab on 15-Sep -- see netbox_funnel.py)
   Pre  = 2026-08-25 .. 2026-08-31 (last week of August)
   Post = each CSP's date of calling / visit -> now (Non_compliant: 8 Sep).
   Leads are aged 48h on both sides (winback_common.AGED). Orders are not aged.
-  Order %s: denominator = CSPs with a post window (called / visited). Post only (user, 14-Sep).
   Grain = DISTINCT CONNECTION_ID per CSP per window, matching the Pre/Post Winback tab.
 
 Colours: green where post > pre, red where post < pre, on every pre/post pair.
@@ -64,7 +60,7 @@ CAT2BUCKET = {"Winback _ 89 CSPs": "89 Winback",
               "Previous Good installers": None}
 # buckets whose KF / Field is fixed; every other bucket is split by tracker column F
 FIXED_MODE = {"Exit": "Field", "750 Opt out": "Field", "Wrong enforcement": "KF"}
-T2_COLS = "D%d:O%d"
+T2_COLS = "D%d:G%d"
 NC_TAB = "Non_compliant list"
 GREEN = {"red": 0.80, "green": 0.92, "blue": 0.82}
 RED = {"red": 0.98, "green": 0.83, "blue": 0.83}
@@ -318,30 +314,13 @@ def main():
             pairs.append((csp, trk[csp]["date"]))
     post = fetch_post(pairs)
     post_start = dict(pairs)
-    ord_post = fetch_orders_post(pairs)
-    netbox = fetch_netbox(set(member))
-    netbox_pre = fetch_netbox_before(pairs)
 
     def row_for(ids):
         pl = pa = pi = ql = qa = qi = 0
         for c in ids:
             a, s, i2 = pre.get(c, (0, 0, 0)); pl += a; pa += s; pi += i2
             a, s, i2 = post.get(c, (0, 0, 0)); ql += a; qa += s; qi += i2
-        # order denominators = CSPs with a post window (called / visited)
-        called = [c for c in ids if c in post_start]
-        n = len(called)
-        applied = [c for c in called if ord_post.get(c, (0, 0))[0] > 0]
-        dq = sum(1 for c in called if ord_post.get(c, (0, 0))[1] > 0)
-        z = sum(1 for c in called if netbox.get(c, 0) > 0)      # has >=1 netbox in hand now
-        zp = sum(1 for c in called if netbox_pre.get(c, 0) > 0)  # ...going into the call
-        # the CSPs that applied for devices since the call: did their funnel move?
-        opl = opa = opi = oql = oqa = oqi = 0
-        for c in applied:
-            a, s, i2 = pre.get(c, (0, 0, 0)); opl += a; opa += s; opi += i2
-            a, s, i2 = post.get(c, (0, 0, 0)); oql += a; oqa += s; oqi += i2
-        return [pct(pa, pl), pct(qa, ql), pct(pi, pa), pct(qi, qa),
-                pct(len(applied), n), pct(dq, n), pct(zp, n), pct(z, n),
-                pct(opa, opl), pct(oqa, oql), pct(opi, opa), pct(oqi, oqa)]
+        return [pct(pa, pl), pct(qa, ql), pct(pi, pa), pct(qi, qa)]
 
     t2_body = [row_for([c for c, bb in member.items() if bb == b]) for b in ORDER]
     t2_tot = row_for(list(member))
@@ -358,44 +337,40 @@ def main():
         if got[:len(row)] != row:
             mismatch.append((b, got[:len(row)], row))
 
-    # the block has changed width twice -- clear it first so no stale column survives
-    ws.batch_clear(["D%d:O%d" % (t2_hdr - 1, t2_total)])
+    # Table 2 is B2A / A2I only since 15-Sep: the order / netbox / applied-CSP block moved to
+    # the 'Netbox Order Funnel' tab (user: "remove this summary"). Only D:G is written.
+    ws.batch_clear(["D%d:G%d" % (t2_hdr - 1, t2_total)])
     data = [{"range": T2_COLS % (t2[b], t2[b]), "values": [row]} for b, row in zip(ORDER, t2_body)]
     data.append({"range": T2_COLS % (t2_total, t2_total), "values": [t2_tot]})
-    data.append({"range": "D%d:O%d" % (t2_hdr - 1, t2_hdr - 1),
-                 "values": [["B2A %", "", "A2I %", "", "Order applied (% of CSPs called)",
-                             "Order delivered (% of CSPs called)",
-                             "% of CSPs with netbox (Pre = start of call date)", "",
-                             "CSPs that applied for devices: B2A %", "",
-                             "CSPs that applied for devices: A2I %", ""]]})
-    data.append({"range": "D%d:O%d" % (t2_hdr, t2_hdr),
-                 "values": [["Pre", "Post", "Pre", "Post", "Post", "Post", "Pre", "Now",
-                             "Pre", "Post", "Pre", "Post"]]})
+    data.append({"range": "D%d:G%d" % (t2_hdr - 1, t2_hdr - 1),
+                 "values": [["B2A %", "", "A2I %", ""]]})
+    data.append({"range": "D%d:G%d" % (t2_hdr, t2_hdr),
+                 "values": [["Pre", "Post", "Pre", "Post"]]})
     ws.batch_update(data, value_input_option="RAW")
 
     sid = ws.id
     reqs = [
         {"repeatCell": {
             "range": {"sheetId": sid, "startRowIndex": min(t1.values()) - 1, "endRowIndex": t2_total,
-                      "startColumnIndex": 2, "endColumnIndex": max(4 + len(dates), 15)},
+                      "startColumnIndex": 2, "endColumnIndex": max(4 + len(dates), 7)},
             "cell": {"userEnteredFormat": {"horizontalAlignment": "CENTER"}},
             "fields": "userEnteredFormat.horizontalAlignment"}},
         {"repeatCell": {
             "range": {"sheetId": sid, "startRowIndex": t2_hdr, "endRowIndex": t2_total,
-                      "startColumnIndex": 3, "endColumnIndex": 15},
+                      "startColumnIndex": 3, "endColumnIndex": 7},
             "cell": {"userEnteredFormat": {"backgroundColor": WHITE}},
             "fields": "userEnteredFormat.backgroundColor"}},
         {"repeatCell": {
             "range": {"sheetId": sid, "startRowIndex": t2_hdr - 2, "endRowIndex": t2_hdr,
-                      "startColumnIndex": 3, "endColumnIndex": 15},
+                      "startColumnIndex": 3, "endColumnIndex": 7},
             "cell": {"userEnteredFormat": {"textFormat": {"bold": True}, "wrapStrategy": "WRAP",
                                            "horizontalAlignment": "CENTER"}},
             "fields": "userEnteredFormat(textFormat.bold,wrapStrategy,horizontalAlignment)"}},
     ]
-    # post vs pre on each pair: E vs D, G vs F, K vs J (netbox), M vs L, O vs N (0-based POST col)
+    # post vs pre on each pair: E vs D, G vs F (0-based col of the POST cell)
     for i, row in enumerate(t2_body + [t2_tot]):
         rr = (t2[ORDER[i]] if i < len(ORDER) else t2_total) - 1
-        for k, col in ((0, 4), (2, 6), (6, 10), (8, 12), (10, 14)):
+        for k, col in ((0, 4), (2, 6)):
             pre_s, post_s = row[k], row[k + 1]
             if pre_s == "-" or post_s == "-":
                 continue
@@ -413,7 +388,7 @@ def main():
           % ("all rows match" if not mismatch else "%d MISMATCH row(s)" % len(mismatch)))
     for b, got, want in mismatch:
         print("   MISMATCH %-22s sheet %s  script %s" % (name(b) if isinstance(b, tuple) else b, got, want))
-    print("  Table 2  (B2A pre/post, A2I pre/post, applied, delivered, with-netbox pre/now, applied-CSPs B2A pre/post, A2I pre/post)")
+    print("  Table 2  (B2A pre/post, A2I pre/post)")
     for b, row in zip(ORDER + ["Total"], t2_body + [t2_tot]):
         print("   %-22s %s" % (name(b) if isinstance(b, tuple) else b, row))
     return 0
