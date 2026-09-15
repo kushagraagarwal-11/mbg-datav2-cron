@@ -15,8 +15,8 @@ Writes, per matching row (tracker columns found by header name in row 3 -- they 
     750                       <- 750                (only when the tracker cell is blank)
 
 DATES
-  The visit sheet mixes formats: '09th Sep', '14 Sep', '10-09-26' (day first) and '09-13-26'
-  (month first), plus typos like '14 seo'. A dd-dd-yy value is read both ways and the
+  The visit sheet mixes formats: '09th Sep', '14 Sep', '10-09-26' (day first), '09-13-26'
+  (month first), '15 09 2026' (spaces), plus typos like '14 seo'. A numeric date is read both ways and the
   interpretation that lands on or before today wins; if both do, day-first wins (the older
   entries are day-first). A visit dated AFTER today is a planned visit -- it is skipped and
   picked up automatically on the first run on/after that date.
@@ -68,8 +68,8 @@ def parse_visit(s, today):
         except ValueError:
             return None, "invalid date %r" % s
         return (d, "") if d <= today else (None, "future %s" % d.isoformat())
-    # dd-dd-yy / dd/dd/yyyy -- ambiguous order
-    m = re.match(r"^(\d{1,2})[\-/.](\d{1,2})[\-/.](\d{2,4})$", s)
+    # dd-dd-yy / dd/dd/yyyy / 'dd mm yyyy' (space-separated, used from 15-Sep) -- ambiguous order
+    m = re.match(r"^(\d{1,2})\s*[\-/.\s]\s*(\d{1,2})\s*[\-/.\s]\s*(\d{2,4})$", s)
     if m:
         a, b, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
         y = y + 2000 if y < 100 else y
@@ -92,7 +92,7 @@ def main():
     today = dt.datetime.now(IST).date()
     gc = gclient()
 
-    rows = gc.open_by_key(SOURCE_SHEET).get_worksheet_by_id(0).get_values("A1:H2000")
+    rows = gc.open_by_key(SOURCE_SHEET).get_worksheet_by_id(0).get_values("A1:Z2000")
     hdr = [c.strip().lower() for c in rows[0]]
     ix = {k: next((i for i, h in enumerate(hdr) if k in h), None)
           for k in ("csp id", "date of visit", "soft winback", "ci(m1)", "750")}
