@@ -42,6 +42,15 @@ TABLE 3  field visits by agent (user, 16-Sep) -- below Table 2, found by its tit
   Columns: one pair per day from 14 Sep to today -- Visits | Soft winback -- then a Total pair.
   A visit counts only once its "Soft Winback (Y/N)" is filled in (user, 16-Sep: a date with a
   blank outcome is a planned / unreported visit). Soft winback = that cell is Yes.
+
+TABLE 4  contacted x soft winback, 2x2 (user, 16-Sep) -- 3 rows below Table 3, moves with it
+  Cohort: Table 1's TOF without Non_compliant = every CSP a tracker bucket owns (distinct CSP).
+  Rows    Contacted: Yes = tracker 'Date of calling / visit' filled (called or visited), No = blank
+  Columns Soft winback: Yes = tracker 'Soft Winback (Y/N)' = Y, No = anything else
+  Each box: CSP count, and B2A / A2I / B2I pre -> post, pooled over the box's CSPs.
+  Pre  = 2026-09-01 .. 2026-09-07 (first week of September -- NOT Table 2's August week)
+  Post = contact date -> now; a CSP never contacted has no contact date, so his post starts on
+         8 Sep (campaign start, the day after the pre week). Leads aged 48h, as in Table 2.
 """
 import re
 import sys
@@ -198,8 +207,135 @@ def visits_table(gc, sh, ws, t2_total):
                                               "startColumnIndex": 1, "endColumnIndex": 3},
                                     "mergeType": "MERGE_ALL"}})
     sh.batch_update({"requests": reqs})
-    return "Table 3 at row %d: %d agents x %d days | visits %s | soft %s" % (
-        start, len(agents), len(days), tot[0::2], tot[1::2])
+    return ("Table 3 at row %d: %d agents x %d days | visits %s | soft %s" % (
+        start, len(agents), len(days), tot[0::2], tot[1::2]), start + nrows - 1)
+
+
+T4_TITLE = "Contacted x Soft winback  (TOF without Non_compliant)"
+T4_PRE = ("2026-09-01", "2026-09-07")
+T4_ROWS = 10                                            # title, note, 2 headers, 2 x 3 box rows
+
+
+def contact_table(sh, ws, start, member, trk, post):
+    """Rewrite Table 4 (2x2 contacted x soft winback) with its title on row `start`."""
+    ids = sorted(c for c, b in member.items() if b != NC)
+    pre = fetch_pre(ids, *T4_PRE)
+    post = dict(post)
+    post.update(fetch_post([(c, BULK_DATE) for c in ids if not trk[c]["date"]]))
+    box = {}
+    for c in ids:
+        box.setdefault((bool(trk[c]["date"]), trk[c]["soft"].upper().startswith("Y")), []).append(c)
+
+    def funnel(cs):
+        pl = pa = pi = ql = qa = qi = 0
+        for c in cs:
+            a, s_, i2 = pre.get(c, (0, 0, 0)); pl += a; pa += s_; pi += i2
+            a, s_, i2 = post.get(c, (0, 0, 0)); ql += a; qa += s_; qi += i2
+        return [("B2A", pct(pa, pl), pct(qa, ql)), ("A2I", pct(pi, pa), pct(qi, qa)),
+                ("B2I", pct(pi, pl), pct(qi, ql))]
+
+    # B:C row label, D:G soft winback Yes, H:K soft winback No
+    vals = [[T4_TITLE] + [""] * 9,
+            ["%d CSPs · Contacted = date of calling / visit filled · Pre = 1-7 Sep · Post = contact "
+             "date -> now (not contacted: 8 Sep -> now) · leads aged 48h" % len(ids)] + [""] * 9,
+            ["Contacted  (visited / called)", "", "Soft winback: Yes", "", "", "",
+             "Soft winback: No", "", "", ""],
+            ["", "", "CSPs", "Metric", "Pre", "Post", "CSPs", "Metric", "Pre", "Post"]]
+    colour = []                                         # (0-based row, 0-based col, pre, post)
+    for k, contacted in enumerate((True, False)):
+        rows = [["Yes" if contacted else "No", ""] + [""] * 8 for _ in range(3)]
+        for j, soft in enumerate((True, False)):
+            cs = box.get((contacted, soft), [])
+            c0 = 2 + 4 * j
+            rows[0][c0] = len(cs)
+            for m, (lab, a, b_) in enumerate(funnel(cs)):
+                rows[m][c0 + 1:c0 + 4] = [lab, a, b_]
+                colour.append((start - 1 + 4 + 3 * k + m, 1 + c0 + 3, a, b_))
+        vals += rows
+
+    sid = ws.id
+    r0 = start - 1
+    if ws.row_count < r0 + T4_ROWS + 6:
+        ws.resize(rows=r0 + T4_ROWS + 6)
+    whole = {"sheetId": sid, "startRowIndex": r0, "endRowIndex": r0 + T4_ROWS + 5,
+             "startColumnIndex": 1, "endColumnIndex": 11}
+    none = {"style": "NONE"}
+    sh.batch_update({"requests": [
+        {"unmergeCells": {"range": whole}},
+        {"updateCells": {"range": whole, "fields": "userEnteredValue,userEnteredFormat"}},
+        {"updateBorders": {"range": whole, "top": none, "bottom": none, "left": none,
+                           "right": none, "innerHorizontal": none, "innerVertical": none}},
+    ]})
+    ws.update(values=vals, range_name="B%d" % start, value_input_option="RAW")
+
+    def rng(ra, rb, ca, cb):
+        return {"sheetId": sid, "startRowIndex": ra, "endRowIndex": rb,
+                "startColumnIndex": ca, "endColumnIndex": cb}
+    solid, medium = {"style": "SOLID"}, {"style": "SOLID_MEDIUM"}
+    grey = {"red": 0.93, "green": 0.93, "blue": 0.93}
+    body0 = r0 + 2                                     # first header row
+    reqs = [
+        {"repeatCell": {"range": rng(r0, r0 + 1, 1, 11),
+                        "cell": {"userEnteredFormat": {"textFormat": {"bold": True}}},
+                        "fields": "userEnteredFormat.textFormat.bold"}},
+        {"repeatCell": {"range": rng(r0 + 1, r0 + 2, 1, 11),
+                        "cell": {"userEnteredFormat": {"textFormat": {"italic": True, "foregroundColor":
+                                 {"red": 0.4, "green": 0.4, "blue": 0.4}}}},
+                        "fields": "userEnteredFormat.textFormat(italic,foregroundColor)"}},
+        {"repeatCell": {"range": rng(body0, body0 + 2, 1, 11),
+                        "cell": {"userEnteredFormat": {"textFormat": {"bold": True}, "backgroundColor": grey,
+                                                       "horizontalAlignment": "CENTER",
+                                                       "verticalAlignment": "MIDDLE", "wrapStrategy": "WRAP"}},
+                        "fields": "userEnteredFormat(textFormat.bold,backgroundColor,horizontalAlignment,"
+                                  "verticalAlignment,wrapStrategy)"}},
+        {"repeatCell": {"range": rng(body0 + 2, body0 + 8, 1, 11),
+                        "cell": {"userEnteredFormat": {"horizontalAlignment": "CENTER",
+                                                       "verticalAlignment": "MIDDLE"}},
+                        "fields": "userEnteredFormat(horizontalAlignment,verticalAlignment)"}},
+        {"repeatCell": {"range": rng(body0 + 2, body0 + 8, 1, 3),
+                        "cell": {"userEnteredFormat": {"textFormat": {"bold": True}, "backgroundColor": grey}},
+                        "fields": "userEnteredFormat(textFormat.bold,backgroundColor)"}},
+        {"updateBorders": {"range": rng(body0, body0 + 8, 1, 11), "top": medium, "bottom": medium,
+                           "left": medium, "right": medium, "innerHorizontal": solid,
+                           "innerVertical": solid}},
+    ]
+    merges = [rng(body0, body0 + 2, 1, 3),             # corner label
+              rng(body0, body0 + 1, 3, 7), rng(body0, body0 + 1, 7, 11)]
+    for k in range(2):
+        ra = body0 + 2 + 3 * k
+        merges += [rng(ra, ra + 3, 1, 3), rng(ra, ra + 3, 3, 4), rng(ra, ra + 3, 7, 8)]
+        for ca in (1, 3, 7):                           # medium outline round each box
+            cb = 3 if ca == 1 else ca + 4
+            reqs.append({"updateBorders": {"range": rng(ra, ra + 3, ca, cb), "top": medium,
+                                           "bottom": medium, "left": medium, "right": medium}})
+    for ca in (3, 7):
+        reqs.append({"updateBorders": {"range": rng(body0, body0 + 8, ca, ca + 4),
+                                       "left": medium, "right": medium}})
+    for m in merges:
+        reqs.append({"mergeCells": {"range": m, "mergeType": "MERGE_ALL"}})
+    for m in merges[3:]:                               # box CSP counts stand out
+        if m["startColumnIndex"] in (3, 7):
+            reqs.append({"repeatCell": {"range": m, "cell": {"userEnteredFormat": {
+                "textFormat": {"bold": True, "fontSize": 12}}},
+                "fields": "userEnteredFormat.textFormat(bold,fontSize)"}})
+    for rr, cc, a, b_ in colour:
+        if a == "-" or b_ == "-" or a == b_:
+            continue
+        up = float(b_.rstrip("%")) > float(a.rstrip("%"))
+        reqs.append({"repeatCell": {"range": rng(rr, rr + 1, cc, cc + 1),
+                                    "cell": {"userEnteredFormat": {"backgroundColor": GREEN if up else RED}},
+                                    "fields": "userEnteredFormat.backgroundColor"}})
+    sh.batch_update({"requests": reqs})
+
+    dated = [trk[c]["date"] for c in ids if trk[c]["date"]]
+    lines = ["Table 4 at row %d: %d CSPs (earliest contact %s)" % (start, len(ids), min(dated) if dated else "-")]
+    for contacted in (True, False):
+        for soft in (True, False):
+            cs = box.get((contacted, soft), [])
+            lines.append("   contacted %-3s soft %-3s %4d CSPs  %s" % (
+                "Yes" if contacted else "No", "Yes" if soft else "No", len(cs),
+                "  ".join("%s %s->%s" % f for f in funnel(cs))))
+    return "\n".join(lines)
 
 
 def name(pair):
@@ -223,7 +359,7 @@ def pct(n, d):
     return "%d%%" % round(100.0 * n / d) if d else "-"
 
 
-def fetch_pre(ids):
+def fetch_pre(ids, start=PRE_START, end=PRE_END):
     out = {}
     ids = sorted(ids)
     for i in range(0, len(ids), 60):
@@ -233,7 +369,7 @@ def fetch_pre(ids):
             AND TO_DATE(CONVERT_TIMEZONE('Asia/Kolkata',f.CREATED_AT)) BETWEEN '%s' AND '%s'
           GROUP BY 1,2 %s)
         SELECT CSP_ID, COUNT(*), SUM(assigned), SUM(installed) FROM conn GROUP BY 1
-        """ % (CONN, "','".join(ids[i:i + 60]), PRE_START, PRE_END, AGED)
+        """ % (CONN, "','".join(ids[i:i + 60]), start, end, AGED)
         for r in mb(sql):
             out[r[0]] = (r[1] or 0, r[2] or 0, r[3] or 0)
     return out
@@ -519,7 +655,9 @@ def main():
                 "fields": "userEnteredFormat.backgroundColor"}})
     sh.batch_update({"requests": reqs})
 
-    print("  " + visits_table(gc, sh, ws, t2_total))
+    t3_msg, t3_end = visits_table(gc, sh, ws, t2_total)
+    print("  " + t3_msg)
+    print("  " + contact_table(sh, ws, t3_end + 3, member, trk, post))
     print("  Table 1  formula-driven, not written. cross-check vs script: %s"
           % ("all rows match" if not mismatch else "%d MISMATCH row(s)" % len(mismatch)))
     for b, got, want in mismatch:
