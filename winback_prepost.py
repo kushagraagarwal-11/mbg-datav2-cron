@@ -36,7 +36,7 @@ import datetime as dt
 
 import gspread
 
-from winback_common import SHEET_ID, PRE_START, PRE_END, CONN, AGED, AGING_HOURS, mb, gclient
+from winback_common import SHEET_ID, PRE_START, PRE_END, CONN, AGED, AGING_HOURS, mb, gclient, stamp
 
 SRC_GID = 0
 OUT_TAB = "Pre/Post Winback"
@@ -596,6 +596,7 @@ def main():
              pct(agg["pi"], agg["pa"]), pct(agg["qi"], agg["qa"]),
              pct(agg["pi"], agg["pl"]), pct(agg["qi"], agg["ql"]),
              hard_count[0], agg["pl"], agg["ql"], AGING_HOURS))
+    stamp(ws)
     return 0
 
 

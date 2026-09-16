@@ -61,7 +61,7 @@ import datetime as dt
 import gspread
 
 from winback_common import (SHEET_ID, PRE_START, PRE_END, CONN, AGED, mb, gclient,
-                            load_noncompliant)
+                            load_noncompliant, stamp)
 
 OUT_GID = 1292308429
 BULK_DATE = dt.date(2026, 9, 8)                 # Non_compliant: done in one go, first date
@@ -678,6 +678,7 @@ def main():
     print("  Table 2  (B2A pre/post, A2I pre/post, B2I pre/post)")
     for b, row in zip(ORDER + ["Total"], t2_body + [t2_tot]):
         print("   %-22s %s" % (name(b) if isinstance(b, tuple) else b, row))
+    stamp(ws, "Table 1 is live formulas (updates instantly)")
     return 0
 
 

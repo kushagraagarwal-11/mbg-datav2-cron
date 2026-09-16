@@ -106,3 +106,26 @@ def load_noncompliant():
     if not ids:
         raise SystemExit("Non_compliant list is empty -- refusing to write zeros.")
     return set(ids)
+
+
+REFRESH_EVERY = "every 20 min"
+STAMP_PREFIX = "Last synced:"
+
+
+def stamp(ws, what="", cell="B1"):
+    """Write 'Last synced: <IST time> · refreshes every 20 min' into a header cell of `ws`.
+    Called at the END of a successful run, so the time shown is when this tab's data was last
+    written. Only writes into an empty cell or one holding an earlier stamp -- never over
+    anything a reviewer typed there."""
+    cur = (ws.get_values(cell) or [[""]])[0]
+    cur = cur[0].strip() if cur else ""
+    if cur and not cur.startswith(STAMP_PREFIX):
+        print("  stamp skipped: %s!%s holds %r" % (ws.title, cell, cur[:40]))
+        return
+    txt = "%s %s  ·  refreshes automatically %s%s" % (
+        STAMP_PREFIX, dt.datetime.now(IST).strftime("%d %b %Y, %I:%M %p IST"), REFRESH_EVERY,
+        ("  ·  " + what) if what else "")
+    ws.update(values=[[txt]], range_name=cell, value_input_option="RAW")
+    ws.format(cell, {"textFormat": {"italic": True, "bold": False, "fontSize": 9,
+                                    "foregroundColor": {"red": 0.2, "green": 0.45, "blue": 0.2}},
+                     "wrapStrategy": "OVERFLOW_CELL", "horizontalAlignment": "LEFT"})

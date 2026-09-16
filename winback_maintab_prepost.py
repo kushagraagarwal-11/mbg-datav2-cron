@@ -40,7 +40,7 @@ import datetime as dt
 
 import gspread
 
-from winback_common import SHEET_ID, PRE_START, PRE_END, CONN, AGED, mb, gclient
+from winback_common import SHEET_ID, PRE_START, PRE_END, CONN, AGED, mb, gclient, stamp
 
 SRC_GID = 0
 # Backups sit next to the script locally. In GitHub Actions the runner is discarded, so the
@@ -241,6 +241,8 @@ def main():
     print("main tab: %d non-soft rows rebuilt (%d changed), %d dated, %d cells coloured; "
           "%d soft-winback rows CLEARED (T:AA). backup -> %s"
           % (len(targets), changed, dated, len(colours), len(soft_idx), bpath))
+    stamp(ws, "auto-filled here: visit dates of Exit / Visiting rows (Willing to Exit sheet) and "
+              "the Pre / Post columns")
     return 0
 
 

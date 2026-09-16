@@ -50,7 +50,7 @@ import datetime as dt
 
 import gspread
 
-from winback_common import SHEET_ID, IST, mb, gclient
+from winback_common import SHEET_ID, IST, mb, gclient, stamp
 
 TAB = "Netbox Order Funnel"
 START = dt.date(2026, 9, 8)
@@ -460,6 +460,7 @@ def main():
     sh.batch_update({"requests": reqs})
 
     print("netbox funnel: %s | vol %s" % ([(s[0], s[1]) for s in stages], vol))
+    stamp(ws)
     return 0
 
 
