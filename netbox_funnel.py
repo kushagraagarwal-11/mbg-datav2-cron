@@ -1,6 +1,7 @@
 """
 'Netbox Order Funnel' tab of the P1/P2 Winbacks sheet -- for a fixed CSP list, since 8 Sep 2026:
-eligible to order -> placed an order -> order delivered -> installed after delivery.
+eligible to order -> placed an order -> delivered (courier) -> CSP confirmed receipt in the app
+-> installed after confirmation.
 
 INPUT
   The CSP IDs in column B of the per-CSP table (below the funnel). That column is the list:
@@ -14,10 +15,24 @@ STAGES (nested -- each stage is a subset of the one above)
                            app's per-CSP ordering switch (gate 0). The app's other eligibility
                            gates (idle-stock / pending receipt / SD affordability / MOQ) are
                            computed live and NOT stored in the warehouse, so they can't be shown.
+  -  Blocked: already holds enough devices   (side row, not a stage) eligible CSPs the app's
+                           HOARDING_BLOCKED rule stopped on EVERY day since 8 Sep. Rule decoded from
+                           the ops "order gate" sheet (exact on its 213 hoarding rows): free ONTs
+                           (IDLE+CUSTODIED+PENDING_CSP_RECEIPT, DEVICE_TYPE ONT) >= 10 AND
+                           15 x install pace - free ONTs <= 0, pace = installs in the previous 30
+                           days / 30. Rebuilt here per day at 00:00 IST from custody history.
+  2b Net eligible to order eligible and NOT blocked every day (a CSP that ordered counts as net
+                           eligible -- the app let him order)
   3  Order placed          >=1 DEVICE_ORDERS request created on/after 8 Sep (IST), any status
-  4  Order delivered       >=1 of those requests reached FULFILLED; delivered-at = the first
-                           history version with STATUS = FULFILLED
-  5  Installed after delivery   >=1 install completed at/after the CSP's first delivery
+  4  Delivered (courier)   >=1 of those requests physically delivered: the dispatch tracker
+                           (wiomdispatchtracker.netlify.app -> its published sheet) says
+                           Delivery Status = Delivered, joined on Service Portal Request_ID =
+                           DEVICE_ORDERS.DISPATCH_REF. An order the CSP already confirmed counts as
+                           delivered even if the tracker lags (user, 16-Sep).
+  5  Receipt confirmed in app   >=1 of those requests reached FULFILLED (the CSP confirmed receipt);
+                           confirmed-at = the first history version with STATUS = FULFILLED.
+                           Until he confirms, the app also blocks his next order (prior receipt).
+  6  Installed after confirmation   >=1 install completed at/after his first confirmation
   Per stage also: active base (latest Quality OS snapshot), installs 25-31 Aug (last week of
   August) and installs since 8 Sep -- summed over that stage's CSPs -- each with a per-day
   average: Aug / 7; since 8 Sep / exact days elapsed since 8 Sep 00:00 IST (count runs to now).
@@ -27,6 +42,7 @@ INSTALLS  PROD_DB.DBT_CSP.FACT_INSTALL_CANDIDATES, all row versions, attributed 
 NETBOX IN HAND  NETBOX_CUSTODY current, STATUS IN (CUSTODIED, IDLE, RETRIEVAL_PENDING).
 """
 import sys
+import time
 import datetime as dt
 
 import gspread
@@ -36,12 +52,17 @@ from winback_common import SHEET_ID, IST, mb, gclient
 TAB = "Netbox Order Funnel"
 START = dt.date(2026, 9, 8)
 START_TS = "'2026-09-08 00:00:00 +05:30'::TIMESTAMP_TZ"
-TABLE_HDR_ROW = 14                      # per-CSP header row; CSP IDs from the row below
+TABLE_HDR_ROW = 16                      # per-CSP header row written by this script
+HOARD_MIN_STOCK, HOARD_COVER_DAYS, PACE_DAYS = 10, 15, 30
 AUG_START, AUG_END = dt.date(2026, 8, 25), dt.date(2026, 8, 31)     # last week of August
-HDRS = ["CSP ID", "CSP Name", "Active\nbase", "Eligible to\norder", "Orders placed\nsince 8 Sep",
-        "Devices\nrequested", "Orders\ndelivered", "Devices\ndelivered", "First\ndelivered on",
-        "Installs\n25-31 Aug", "Installs\nsince 8 Sep", "Installs after\ndelivery",
-        "Netboxes\nin hand now", "Latest order\nstatus"]
+HDRS = ["CSP ID", "CSP Name", "Active\nbase", "Eligible to\norder",
+        "Blocked: holds enough\ndevices (days)", "Orders placed\nsince 8 Sep",
+        "Devices\nrequested", "Orders delivered\n(courier)", "Delivered on\n(courier)",
+        "Orders confirmed\nin app", "Devices\nconfirmed", "First confirmed\nin app on",
+        "Installs\n25-31 Aug", "Installs\nsince 8 Sep", "Installs after\nconfirmation",
+        "Netboxes\nin hand now", "Latest order\nstatus (app)"]
+TRACKER_CSV = ("https://docs.google.com/spreadsheets/d/e/2PACX-1vSwYnbFT8HzwkFZQR1DuERtmuNbeI1fBOqihf_"
+               "9OJigB7-RwKzyvUUTi66Q3wUxfwcU6EfVHWK3HMGN/pub?gid=0&single=true&output=csv")
 
 INK = {"red": 0.09, "green": 0.24, "blue": 0.20}
 MUTED = {"red": 0.42, "green": 0.46, "blue": 0.45}
@@ -74,7 +95,7 @@ def fetch(ids):
         # one row per request: current state + when it was first FULFILLED
         for r in mb("""
           WITH v AS (
-            SELECT REQUEST_ID, CSP_ID, STATUS, QUANTITY_REQUESTED, QUANTITY_APPROVED, CREATED_AT,
+            SELECT REQUEST_ID, CSP_ID, STATUS, QUANTITY_REQUESTED, QUANTITY_APPROVED, CREATED_AT, DISPATCH_REF,
                    _FIVETRAN_ACTIVE, _FIVETRAN_START
             FROM PROD_DB.CSP_ASSET_CUSTODY_SERVICE_CSP_ASSET_CUSTODY_SERVICE.DEVICE_ORDERS
             WHERE CSP_ID IN ('%s') AND CREATED_AT >= %s)
@@ -83,12 +104,13 @@ def fetch(ids):
                  MAX(IFF(_FIVETRAN_ACTIVE, QUANTITY_REQUESTED, NULL)),
                  MAX(IFF(_FIVETRAN_ACTIVE, QUANTITY_APPROVED, NULL)),
                  MIN(IFF(STATUS = 'FULFILLED', _FIVETRAN_START, NULL)),
-                 MIN(CREATED_AT)
+                 MIN(CREATED_AT),
+                 MAX(IFF(_FIVETRAN_ACTIVE, DISPATCH_REF, NULL))
           FROM v GROUP BY 1, 2""" % (q(c), START_TS)):
             orders.setdefault(r[0], []).append(dict(
                 status=r[2] or "", req=int(r[3] or 0), appr=int(r[4] or 0),
-                delivered=ts(r[5]) if r[5] else None,
-                created=ts(r[6])))
+                delivered=ts(r[5]) if r[5] else None,          # = confirmed in app
+                created=ts(r[6]), ref=(r[7] or "").strip()))
         for r in mb("""
           WITH v AS (
             SELECT CSP_ID, CONNECTION_ID,
@@ -99,7 +121,7 @@ def fetch(ids):
               AND (OTP_VERIFIED_FLAG OR INSTALLATION_COMPLETED_AT IS NOT NULL OR COMPLETED_STEP>=7)
             GROUP BY 1, 2)
           SELECT CSP_ID, done_at FROM v
-          WHERE done_at >= '2026-08-25 00:00:00 +05:30'::TIMESTAMP_TZ""" % q(c)):
+          WHERE done_at >= '2026-08-08 00:00:00 +05:30'::TIMESTAMP_TZ""" % q(c)):
             installs.setdefault(r[0], []).append(ts(r[1]))
         # active base = ACTIVE_CONNECTION_COUNT on the latest Quality OS snapshot
         for r in mb("""
@@ -118,6 +140,56 @@ def fetch(ids):
           GROUP BY 1""" % q(c)):
             netbox[r[0]] = int(r[1] or 0)
     return names, allowed, orders, installs, netbox, active
+
+
+def fetch_free_ont(ids, days):
+    """{csp: {day: free ONTs held at 00:00 IST that day}} from NETBOX_CUSTODY history."""
+    out = {}
+    union = " UNION ALL ".join(
+        "SELECT DATE '%s' AS d, '%s 00:00:00 +05:30'::TIMESTAMP_TZ AS t" % (d.isoformat(), d.isoformat())
+        for d in days)
+    for c in chunks(ids, 30):
+        for r in mb("""
+          WITH days AS (%s)
+          SELECT n.CSP_ID, days.d, COUNT(DISTINCT n.DEVICE_ID)
+          FROM PROD_DB.CSP_ASSET_CUSTODY_SERVICE_CSP_ASSET_CUSTODY_SERVICE.NETBOX_CUSTODY n
+          JOIN days ON n._FIVETRAN_START <= days.t AND n._FIVETRAN_END > days.t
+          WHERE n.CSP_ID IN ('%s') AND n.DEVICE_TYPE = 'ONT'
+            AND n.STATUS IN ('IDLE','CUSTODIED','PENDING_CSP_RECEIPT')
+          GROUP BY 1, 2""" % (union, q(c))):
+            out.setdefault(r[0], {})[dt.date.fromisoformat(r[1][:10])] = int(r[2] or 0)
+    return out
+
+
+def fetch_tracker():
+    """dispatch_ref -> (delivery status, delivered date) from the dispatch tracker's sheet."""
+    import csv, io, requests
+    last = None
+    for i in range(3):
+        try:
+            resp = requests.get(TRACKER_CSV, timeout=60)
+            resp.raise_for_status()
+            break
+        except requests.RequestException as e:
+            last = e
+            time.sleep(10 * (i + 1))
+    else:
+        raise RuntimeError("dispatch tracker unreachable: %s" % last)
+    out = {}
+    for row in csv.DictReader(io.StringIO(resp.content.decode("utf-8"))):
+        row = {k.strip(): (v or "").strip() for k, v in row.items() if k}
+        ref = row.get("Service Portal Request_ID", "")
+        if not ref:
+            continue
+        d = None
+        try:
+            d = dt.datetime.strptime(row.get("Delivered Date", ""), "%d-%b-%Y").date()
+        except ValueError:
+            pass
+        out[ref] = (row.get("Delivery Status", ""), d)
+    if len(out) < 500:
+        raise RuntimeError("dispatch tracker returned only %d rows -- refusing to use it" % len(out))
+    return out
 
 
 def ts(v):
@@ -145,20 +217,51 @@ def main():
     if seed:
         ids = list(dict.fromkeys(seed))
     else:
-        ids = [c[0].strip() for c in ws.get_values("B%d:B2000" % (TABLE_HDR_ROW + 1)) if c and c[0].strip()]
-        ids = list(dict.fromkeys(ids))
+        # the list lives under the "CSP ID" header, wherever the last build put it
+        colb = [c[0].strip() if c else "" for c in ws.get_values("B1:B2000")]
+        hdr_at = next((i for i, v in enumerate(colb) if v == "CSP ID"), None)
+        if hdr_at is None:
+            print("ABORT: no 'CSP ID' header in column B")
+            return 1
+        ids = list(dict.fromkeys(v for v in colb[hdr_at + 1:] if v))
     if not ids:
-        print("ABORT: no CSP IDs in column B below row %d" % TABLE_HDR_ROW)
+        print("ABORT: no CSP IDs under the 'CSP ID' header")
         return 1
 
     names, allowed, orders, installs, netbox, active = fetch(ids)
+    tracker = fetch_tracker()
     start_dt = dt.datetime(2026, 9, 8, tzinfo=IST)
+    today = dt.datetime.now(IST).date()
+    days = [START + dt.timedelta(days=k) for k in range((today - START).days + 1)]
+    free_ont = fetch_free_ont(ids, days)
 
-    body, per, st = [], {}, {"elig": set(), "placed": set(), "deliv": set(), "inst": set()}
-    vol = dict(orders=0, req=0, deliv_orders=0, deliv_dev=0, inst_all=0, inst_after=0)
+    def blocked_days(c):
+        """days since 8 Sep on which the HOARDING rule would stop an order (00:00 IST)"""
+        n_b, last = 0, False
+        for d in days:
+            t0 = dt.datetime(d.year, d.month, d.day, tzinfo=IST)
+            pace = sum(1 for t in installs.get(c, [])
+                       if t0 - dt.timedelta(days=PACE_DAYS) <= t < t0) / float(PACE_DAYS)
+            free = free_ont.get(c, {}).get(d, 0)
+            last = free >= HOARD_MIN_STOCK and HOARD_COVER_DAYS * pace - free <= 0
+            if last:
+                n_b += 1
+        return n_b, last
+
+    body, per = [], {}
+    st = {"elig": set(), "blocked": set(), "net": set(), "placed": set(), "courier": set(),
+          "deliv": set(), "inst": set()}
+    vol = dict(orders=0, req=0, cour_orders=0, cour_dev=0, deliv_orders=0, deliv_dev=0,
+               awaiting=0, inst_all=0, inst_after=0)
     for c in ids:
         o = orders.get(c, [])
-        deliv = [x for x in o if x["status"] == "FULFILLED"]
+        deliv = [x for x in o if x["status"] == "FULFILLED"]            # confirmed in app
+        for x in o:
+            tstat, tdate = tracker.get(x["ref"], ("", None))
+            x["courier"] = tstat.lower() == "delivered" or x["status"] == "FULFILLED"
+            x["courier_date"] = tdate
+        cour = [x for x in o if x["courier"]]
+        cour_dates = [x["courier_date"] for x in cour if x["courier_date"]]
         first_deliv = min((x["delivered"] for x in deliv if x["delivered"]), default=None)
         all_ins = installs.get(c, [])
         aug = [t for t in all_ins if AUG_START <= t.astimezone(IST).date() <= AUG_END]
@@ -166,25 +269,40 @@ def main():
         after = [t for t in ins if first_deliv and t >= first_deliv]
         latest = max(o, key=lambda x: x["created"])["status"] if o else "-"
         el = allowed.get(c, False)
+        bd, blocked_today = blocked_days(c)
+        if el and blocked_today:
+            st.setdefault("blocked_today", set()).add(c)
         if el:
             st["elig"].add(c)
+            if bd == len(days) and not o:
+                st["blocked"].add(c)
+            else:
+                st["net"].add(c)
             if o:
                 st["placed"].add(c)
-                if deliv:
-                    st["deliv"].add(c)
-                    if after:
-                        st["inst"].add(c)
+                if cour:
+                    st["courier"].add(c)
+                    if deliv:
+                        st["deliv"].add(c)
+                        if after:
+                            st["inst"].add(c)
         vol["orders"] += len(o); vol["req"] += sum(x["req"] for x in o)
+        vol["cour_orders"] += len(cour); vol["cour_dev"] += sum(x["appr"] or x["req"] for x in cour)
+        vol["awaiting"] += sum(1 for x in cour if x["status"] != "FULFILLED")
         vol["deliv_orders"] += len(deliv); vol["deliv_dev"] += sum(x["appr"] for x in deliv)
         vol["inst_all"] += len(ins); vol["inst_after"] += len(after)
         per[c] = (active.get(c, 0), len(aug), len(ins))
-        body.append([c, names.get(c, ""), active.get(c, 0), "Yes" if el else "No", len(o),
-                     sum(x["req"] for x in o), len(deliv), sum(x["appr"] for x in deliv),
+        body.append([c, names.get(c, ""), active.get(c, 0), "Yes" if el else "No",
+                     ("%d of %d" % (bd, len(days))) if bd else "-", len(o),
+                     sum(x["req"] for x in o), len(cour),
+                     min(cour_dates).strftime("%d %b") if cour_dates else "-",
+                     len(deliv), sum(x["appr"] for x in deliv),
                      first_deliv.astimezone(IST).strftime("%d %b") if first_deliv else "-",
                      len(aug), len(ins), len(after) if first_deliv else "-", netbox.get(c, 0), latest])
 
     n = len(ids)
-    groups = [set(ids), st["elig"], st["placed"], st["deliv"], st["inst"]]
+    groups = [set(ids), st["elig"], st["blocked"], st["net"], st["placed"], st["courier"],
+              st["deliv"], st["inst"]]
 
     def sums(g):                      # active base, installs 25-31 Aug, installs since 8 Sep
         return tuple(sum(per[c][k] for c in g) for k in range(3))
@@ -192,12 +310,20 @@ def main():
     stages = [
         ("CSPs in the list", n, ""),
         ("Eligible to order (ordering switch ON)", len(st["elig"]), ""),
+        ("   blocked: already holds enough devices", len(st["blocked"]),
+         "blocked every day since 8 Sep (free ONTs >= 10 covering 15+ days of installs) · today "
+         "%d blocked, %d of them right after their own order arrived"
+         % (len(st.get("blocked_today", ())), len(st.get("blocked_today", set()) & st["placed"]))),
+        ("Net eligible to order", len(st["net"]), ""),
         ("Placed a netbox order since 8 Sep", len(st["placed"]),
          "%d orders · %d devices requested" % (vol["orders"], vol["req"])),
-        ("Order delivered", len(st["deliv"]),
-         "%d orders · %d devices delivered" % (vol["deliv_orders"], vol["deliv_dev"])),
-        ("Installed after delivery", len(st["inst"]),
-         "%d installs after delivery" % vol["inst_after"]),
+        ("Delivered (courier)", len(st["courier"]),
+         "%d orders · %d devices delivered" % (vol["cour_orders"], vol["cour_dev"])),
+        ("CSP confirmed receipt in app", len(st["deliv"]),
+         "%d orders · %d devices confirmed · %d delivered orders awaiting confirmation"
+         % (vol["deliv_orders"], vol["deliv_dev"], vol["awaiting"])),
+        ("Installed after confirming receipt", len(st["inst"]),
+         "%d installs after confirmation" % vol["inst_after"]),
     ]
     now = dt.datetime.now(IST)
     # installs since 8 Sep run up to NOW, so their per-day average divides by the exact time
@@ -225,6 +351,10 @@ def main():
     ipd_colours = []
     for i, (lab, cnt, v) in enumerate(stages):
         prev = stages[i - 1][1] if i else None
+        if lab.strip().startswith("blocked"):
+            prev = stages[i - 1][1]                     # share of eligible
+        elif i and stages[i - 1][0].strip().startswith("blocked"):
+            prev = stages[i - 2][1]                     # net eligible vs eligible
         ab, ia, i8 = sums(groups[i])
         a_pd, s_pd = round(ia / 7.0, 1), round(i8 / days_since, 1)
         top[4 + i] = [lab, "", cnt, pct(cnt, n), pct(cnt, prev) if prev is not None else "-", "",
@@ -293,7 +423,7 @@ def main():
     reqs.append({"mergeCells": {"range": {"sheetId": sid, "startRowIndex": 4, "endRowIndex": 5,
                                           "startColumnIndex": 1, "endColumnIndex": 3},
                                 "mergeType": "MERGE_ALL"}})
-    for idx, w in enumerate([80, 190, 80, 80, 90, 110, 110, 130, 80, 90, 90, 90, 80, 100]):
+    for idx, w in enumerate([80, 190, 80, 80, 110, 90, 110, 110, 130, 90, 90, 90, 90, 90, 90, 80, 100]):
         reqs.append({"updateDimensionProperties": {
             "range": {"sheetId": sid, "dimension": "COLUMNS", "startIndex": 1 + idx, "endIndex": 2 + idx},
             "properties": {"pixelSize": w}, "fields": "pixelSize"}})
@@ -316,6 +446,14 @@ def main():
             "cell": {"userEnteredFormat": {"backgroundColor": {"red": 0.80, "green": 0.92, "blue": 0.82}
                                            if up else {"red": 0.98, "green": 0.83, "blue": 0.83}}},
             "fields": "userEnteredFormat.backgroundColor"}})
+    for i, (lab, _, _) in enumerate(stages):             # the side row reads as a deduction
+        if lab.strip().startswith("blocked"):
+            reqs.append({"repeatCell": {
+                "range": {"sheetId": sid, "startRowIndex": 5 + i, "endRowIndex": 6 + i,
+                          "startColumnIndex": 1, "endColumnIndex": 13},
+                "cell": {"userEnteredFormat": {"textFormat": {"italic": True, "foregroundColor":
+                                                              {"red": 0.66, "green": 0.18, "blue": 0.18}}}},
+                "fields": "userEnteredFormat.textFormat.italic,userEnteredFormat.textFormat.foregroundColor"}})
     sh.batch_update({"requests": reqs})
 
     print("netbox funnel: %s | vol %s" % ([(s[0], s[1]) for s in stages], vol))
