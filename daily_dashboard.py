@@ -44,6 +44,8 @@ TABLE 3  field visits by agent (user, 16-Sep) -- below Table 2, found by its tit
   Columns: one pair per day from 14 Sep to today -- Visits | Soft winback -- then a Total pair.
   A visit counts only once its "Soft Winback (Y/N)" is filled in (user, 16-Sep: a date with a
   blank outcome is a planned / unreported visit). Soft winback = that cell is Yes.
+  Colour (user, 16-Sep): each agent's per-day Visits cell is green when > 1, red otherwise
+  (Total row / Total column uncoloured).
 
 TABLE 4  contacted x soft winback, 2x2 (user, 16-Sep) -- between Table 1 and Table 2 (user moved it
   there): found by its title in column B; if the title is missing it goes in the T4_ROWS rows that end
@@ -206,6 +208,14 @@ def visits_table(gc, sh, ws, t2_total):
         {"updateBorders": {"range": grid, "top": solid, "bottom": solid, "left": solid,
                            "right": solid, "innerHorizontal": solid, "innerVertical": solid}},
     ]
+    for ai in range(len(agents)):                       # per-day visits: >1 green, else red
+        for k in range(len(days)):
+            v = body[ai][2 + 2 * k]
+            reqs.append({"repeatCell": {
+                "range": {"sheetId": sid, "startRowIndex": r0 + 3 + ai, "endRowIndex": r0 + 4 + ai,
+                          "startColumnIndex": 3 + 2 * k, "endColumnIndex": 4 + 2 * k},
+                "cell": {"userEnteredFormat": {"backgroundColor": GREEN if v > 1 else RED}},
+                "fields": "userEnteredFormat.backgroundColor"}})
     for c0 in range(3, 1 + ncols, 2):                  # each date / total header over its pair
         reqs.append({"mergeCells": {"range": {"sheetId": sid, "startRowIndex": r0 + 1,
                                               "endRowIndex": r0 + 2, "startColumnIndex": c0,
