@@ -16,12 +16,15 @@ STAGES (nested -- each stage is a subset of the one above)
                            gates (idle-stock / pending receipt / SD affordability / MOQ) are
                            computed live and NOT stored in the warehouse, so they can't be shown.
   -  Blocked: already holds enough devices   (side row, not a stage) eligible CSPs the app's
-                           HOARDING_BLOCKED rule stopped on EVERY day since 8 Sep. Rule decoded from
+                           HOARDING_BLOCKED rule blocks TODAY (00:00 IST) and who have not placed an
+                           order since 8 Sep -- what the app shows him now (user, 16-Sep: Giganet,
+                           unblocked 8-10 Sep at 9 free ONTs, blocked since 11 Sep, must count; the
+                           earlier "blocked every day" test missed him). Rule decoded from
                            the ops "order gate" sheet (exact on its 213 hoarding rows): free ONTs
                            (IDLE+CUSTODIED+PENDING_CSP_RECEIPT, DEVICE_TYPE ONT) >= 10 AND
                            15 x install pace - free ONTs <= 0, pace = installs in the previous 30
                            days / 30. Rebuilt here per day at 00:00 IST from custody history.
-  2b Net eligible to order eligible and NOT blocked every day (a CSP that ordered counts as net
+  2b Net eligible to order eligible and NOT in the blocked row (a CSP that ordered counts as net
                            eligible -- the app let him order)
   3  Order placed          >=1 DEVICE_ORDERS request created on/after 8 Sep (IST), any status
   4  Delivered (courier)   >=1 of those requests physically delivered: the dispatch tracker
@@ -274,7 +277,7 @@ def main():
             st.setdefault("blocked_today", set()).add(c)
         if el:
             st["elig"].add(c)
-            if bd == len(days) and not o:
+            if blocked_today and not o:
                 st["blocked"].add(c)
             else:
                 st["net"].add(c)
@@ -311,8 +314,8 @@ def main():
         ("CSPs in the list", n, ""),
         ("Eligible to order (ordering switch ON)", len(st["elig"]), ""),
         ("   blocked: already holds enough devices", len(st["blocked"]),
-         "blocked every day since 8 Sep (free ONTs >= 10 covering 15+ days of installs) · today "
-         "%d blocked, %d of them right after their own order arrived"
+         "blocked by the app today (free ONTs >= 10 covering 15+ days of installs) and no order "
+         "since 8 Sep · all blocked today: %d, %d of them right after their own order arrived"
          % (len(st.get("blocked_today", ())), len(st.get("blocked_today", set()) & st["placed"]))),
         ("Net eligible to order", len(st["net"]), ""),
         ("Placed a netbox order since 8 Sep", len(st["placed"]),
