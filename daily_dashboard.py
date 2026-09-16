@@ -35,10 +35,18 @@ TABLE 2  per bucket, pooled (sum numerators / sum denominators)
   Grain = DISTINCT CONNECTION_ID per CSP per window, matching the Pre/Post Winback tab.
 
 Colours: green where post > pre, red where post < pre, on every pre/post pair.
+
+TABLE 3  field visits by agent (user, 16-Sep) -- below Table 2, found by its title in column B
+  Source: 'Willing to Exit CSPs' sheet; agent = Owner Name, date = Date of Visit (read with the
+  same parser as sync_exit_visits.py, so planned/future visits are not counted).
+  Columns: one pair per day from 14 Sep to today -- Visits | Soft winback -- then a Total pair.
+  Soft winback = that visit's "Soft Winback (Y/N)" is Yes.
 """
 import re
 import sys
 import datetime as dt
+
+import gspread
 
 from winback_common import (SHEET_ID, PRE_START, PRE_END, CONN, AGED, mb, gclient,
                             load_noncompliant)
@@ -66,6 +74,124 @@ NC_TAB = "Non_compliant list"
 GREEN = {"red": 0.80, "green": 0.92, "blue": 0.82}
 RED = {"red": 0.98, "green": 0.83, "blue": 0.83}
 WHITE = {"red": 1, "green": 1, "blue": 1}
+
+
+VISIT_SHEET = "1WsADMo2slH0VZhCdBbAg2ortl6_AfTs-hSBvTBEoRto"
+VISITS_FROM = dt.date(2026, 9, 14)
+T3_TITLE = "Field visits by agent (Willing to Exit sheet)"
+
+
+def visits_table(gc, sh, ws, t2_total):
+    """Rewrite Table 3 under Table 2. Returns printable summary."""
+    from sync_exit_visits import parse_visit
+    from winback_common import IST
+    today = dt.datetime.now(IST).date()
+    src = gc.open_by_key(VISIT_SHEET).get_worksheet_by_id(0).get_values("A1:Z2000")
+    hdr = [c.strip().lower() for c in src[0]]
+
+    def col(name):
+        hits = [i for i, h in enumerate(hdr) if h == name]
+        if len(hits) != 1:
+            raise RuntimeError("visit sheet header %r found %d times" % (name, len(hits)))
+        return hits[0]
+    i_id, i_own, i_dt, i_sw = col("csp id"), col("owner name"), col("date of visit"), col("soft winback (y/n)")
+    days = [VISITS_FROM + dt.timedelta(days=k) for k in range((today - VISITS_FROM).days + 1)]
+    agents, cnt = [], {}
+    for r in src[1:]:
+        g = lambda i: r[i].strip() if len(r) > i else ""
+        if not g(i_id):
+            continue
+        a = g(i_own) or "(no owner)"
+        if a not in agents:
+            agents.append(a)
+        d, _ = parse_visit(g(i_dt), today)
+        if d is None or d < VISITS_FROM:
+            continue
+        v = cnt.setdefault((a, d), [0, 0])
+        v[0] += 1
+        v[1] += 1 if g(i_sw).upper().startswith("Y") else 0
+    agents.sort(key=lambda a: (-sum(cnt.get((a, d), [0, 0])[0] for d in days), a))
+
+    colb = [c[0].strip() if c else "" for c in ws.get_values("B1:B200")]
+    start = next((i + 1 for i, v in enumerate(colb) if v == T3_TITLE), t2_total + 3)
+    ncols = 1 + 1 + 2 * (len(days) + 1)                 # B agent, C blank, pairs from D
+    nrows = 3 + len(agents) + 1
+    need_rows, need_cols = start + nrows + 2, 1 + ncols + 1
+    if ws.row_count < need_rows or ws.col_count < need_cols:
+        ws.resize(rows=max(ws.row_count, need_rows), cols=max(ws.col_count, need_cols))
+    last_col = gspread.utils.rowcol_to_a1(1, 1 + ncols).rstrip("1")
+    ws.batch_clear(["B%d:%s%d" % (start, last_col, start + nrows + 30)])
+
+    title = [T3_TITLE] + [""] * (ncols - 1)
+    top = ["Agent", ""]
+    sub = ["", ""]
+    for d in days:
+        top += [d.strftime("%d %b"), ""]
+        sub += ["Visits", "Soft winback"]
+    top += ["Total", ""]
+    sub += ["Visits", "Soft winback"]
+    body, tot = [], [0] * (2 * (len(days) + 1))
+    for a in agents:
+        row = [a, ""]
+        tv = ts_ = 0
+        for k, d in enumerate(days):
+            v, w = cnt.get((a, d), [0, 0])
+            row += [v, w]
+            tv += v; ts_ += w
+            tot[2 * k] += v; tot[2 * k + 1] += w
+        row += [tv, ts_]
+        tot[-2] += tv; tot[-1] += ts_
+        body.append(row)
+    total = ["Total", ""] + tot
+    ws.update(values=[title, top, sub] + body + [total], range_name="B%d" % start,
+              value_input_option="RAW")
+
+    sid = ws.id
+    r0, r1 = start - 1, start - 1 + nrows                # 0-based rows of the block
+    grid = {"sheetId": sid, "startRowIndex": r0 + 1, "endRowIndex": r1,
+            "startColumnIndex": 1, "endColumnIndex": 1 + ncols}
+    solid = {"style": "SOLID"}
+    reqs = [
+        {"unmergeCells": {"range": {"sheetId": sid, "startRowIndex": r0, "endRowIndex": r1 + 30,
+                                    "startColumnIndex": 1, "endColumnIndex": 1 + ncols}}},
+        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": r0, "endRowIndex": r1 + 30,
+                                  "startColumnIndex": 1, "endColumnIndex": 1 + ncols},
+                        "cell": {"userEnteredFormat": {"backgroundColor": WHITE,
+                                                       "textFormat": {"bold": False}}},
+                        "fields": "userEnteredFormat(backgroundColor,textFormat.bold)"}},
+        {"updateBorders": {"range": {"sheetId": sid, "startRowIndex": r0, "endRowIndex": r1 + 30,
+                                     "startColumnIndex": 1, "endColumnIndex": 1 + ncols},
+                           "top": {"style": "NONE"}, "bottom": {"style": "NONE"},
+                           "left": {"style": "NONE"}, "right": {"style": "NONE"},
+                           "innerHorizontal": {"style": "NONE"}, "innerVertical": {"style": "NONE"}}},
+        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": r0, "endRowIndex": r0 + 3,
+                                  "startColumnIndex": 1, "endColumnIndex": 1 + ncols},
+                        "cell": {"userEnteredFormat": {"textFormat": {"bold": True}}},
+                        "fields": "userEnteredFormat.textFormat.bold"}},
+        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": r1 - 1, "endRowIndex": r1,
+                                  "startColumnIndex": 1, "endColumnIndex": 1 + ncols},
+                        "cell": {"userEnteredFormat": {"textFormat": {"bold": True},
+                                 "backgroundColor": {"red": 0.93, "green": 0.93, "blue": 0.93}}},
+                        "fields": "userEnteredFormat(textFormat.bold,backgroundColor)"}},
+        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": r0 + 1, "endRowIndex": r1,
+                                  "startColumnIndex": 3, "endColumnIndex": 1 + ncols},
+                        "cell": {"userEnteredFormat": {"horizontalAlignment": "CENTER",
+                                                       "wrapStrategy": "WRAP"}},
+                        "fields": "userEnteredFormat(horizontalAlignment,wrapStrategy)"}},
+        {"updateBorders": {"range": grid, "top": solid, "bottom": solid, "left": solid,
+                           "right": solid, "innerHorizontal": solid, "innerVertical": solid}},
+    ]
+    for c0 in range(3, 1 + ncols, 2):                  # each date / total header over its pair
+        reqs.append({"mergeCells": {"range": {"sheetId": sid, "startRowIndex": r0 + 1,
+                                              "endRowIndex": r0 + 2, "startColumnIndex": c0,
+                                              "endColumnIndex": c0 + 2}, "mergeType": "MERGE_ALL"}})
+    for rr in range(r0 + 1, r1):                        # agent name spans B:C
+        reqs.append({"mergeCells": {"range": {"sheetId": sid, "startRowIndex": rr, "endRowIndex": rr + 1,
+                                              "startColumnIndex": 1, "endColumnIndex": 3},
+                                    "mergeType": "MERGE_ALL"}})
+    sh.batch_update({"requests": reqs})
+    return "Table 3 at row %d: %d agents x %d days | visits %s | soft %s" % (
+        start, len(agents), len(days), tot[0::2], tot[1::2])
 
 
 def name(pair):
@@ -385,6 +511,7 @@ def main():
                 "fields": "userEnteredFormat.backgroundColor"}})
     sh.batch_update({"requests": reqs})
 
+    print("  " + visits_table(gc, sh, ws, t2_total))
     print("  Table 1  formula-driven, not written. cross-check vs script: %s"
           % ("all rows match" if not mismatch else "%d MISMATCH row(s)" % len(mismatch)))
     for b, got, want in mismatch:
