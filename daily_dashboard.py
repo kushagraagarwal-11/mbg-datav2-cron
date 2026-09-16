@@ -26,6 +26,7 @@ TABLE 1  per bucket: D = total, E.. = per date      *** FORMULA-DRIVEN IN THE SH
 TABLE 2  per bucket, pooled (sum numerators / sum denominators)
   D/E  B2A % pre/post     bookings offered -> technician assigned
   F/G  A2I % pre/post     assigned -> installed
+  H/I  B2I % pre/post     bookings offered -> installed, end to end (user, 16-Sep)
   (order applied / delivered, netbox and applied-CSP columns moved to the Netbox Order
    Funnel tab on 15-Sep -- see netbox_funnel.py)
   Pre  = 2026-08-25 .. 2026-08-31 (last week of August)
@@ -60,7 +61,7 @@ CAT2BUCKET = {"Winback _ 89 CSPs": "89 Winback",
               "Previous Good installers": None}
 # buckets whose KF / Field is fixed; every other bucket is split by tracker column F
 FIXED_MODE = {"Exit": "Field", "750 Opt out": "Field", "Wrong enforcement": "KF"}
-T2_COLS = "D%d:G%d"
+T2_COLS = "D%d:I%d"
 NC_TAB = "Non_compliant list"
 GREEN = {"red": 0.80, "green": 0.92, "blue": 0.82}
 RED = {"red": 0.98, "green": 0.83, "blue": 0.83}
@@ -320,7 +321,7 @@ def main():
         for c in ids:
             a, s, i2 = pre.get(c, (0, 0, 0)); pl += a; pa += s; pi += i2
             a, s, i2 = post.get(c, (0, 0, 0)); ql += a; qa += s; qi += i2
-        return [pct(pa, pl), pct(qa, ql), pct(pi, pa), pct(qi, qa)]
+        return [pct(pa, pl), pct(qa, ql), pct(pi, pa), pct(qi, qa), pct(pi, pl), pct(qi, ql)]
 
     t2_body = [row_for([c for c, bb in member.items() if bb == b]) for b in ORDER]
     t2_tot = row_for(list(member))
@@ -337,40 +338,40 @@ def main():
         if got[:len(row)] != row:
             mismatch.append((b, got[:len(row)], row))
 
-    # Table 2 is B2A / A2I only since 15-Sep: the order / netbox / applied-CSP block moved to
+    # Table 2 is B2A / A2I / B2I (D:I) since 16-Sep; the order / netbox / applied-CSP block moved to
     # the 'Netbox Order Funnel' tab (user: "remove this summary"). Only D:G is written.
-    ws.batch_clear(["D%d:G%d" % (t2_hdr - 1, t2_total)])
+    ws.batch_clear(["D%d:I%d" % (t2_hdr - 1, t2_total)])
     data = [{"range": T2_COLS % (t2[b], t2[b]), "values": [row]} for b, row in zip(ORDER, t2_body)]
     data.append({"range": T2_COLS % (t2_total, t2_total), "values": [t2_tot]})
-    data.append({"range": "D%d:G%d" % (t2_hdr - 1, t2_hdr - 1),
-                 "values": [["B2A %", "", "A2I %", ""]]})
-    data.append({"range": "D%d:G%d" % (t2_hdr, t2_hdr),
-                 "values": [["Pre", "Post", "Pre", "Post"]]})
+    data.append({"range": "D%d:I%d" % (t2_hdr - 1, t2_hdr - 1),
+                 "values": [["B2A %", "", "A2I %", "", "B2I %", ""]]})
+    data.append({"range": "D%d:I%d" % (t2_hdr, t2_hdr),
+                 "values": [["Pre", "Post", "Pre", "Post", "Pre", "Post"]]})
     ws.batch_update(data, value_input_option="RAW")
 
     sid = ws.id
     reqs = [
         {"repeatCell": {
             "range": {"sheetId": sid, "startRowIndex": min(t1.values()) - 1, "endRowIndex": t2_total,
-                      "startColumnIndex": 2, "endColumnIndex": max(4 + len(dates), 7)},
+                      "startColumnIndex": 2, "endColumnIndex": max(4 + len(dates), 9)},
             "cell": {"userEnteredFormat": {"horizontalAlignment": "CENTER"}},
             "fields": "userEnteredFormat.horizontalAlignment"}},
         {"repeatCell": {
             "range": {"sheetId": sid, "startRowIndex": t2_hdr, "endRowIndex": t2_total,
-                      "startColumnIndex": 3, "endColumnIndex": 7},
+                      "startColumnIndex": 3, "endColumnIndex": 9},
             "cell": {"userEnteredFormat": {"backgroundColor": WHITE}},
             "fields": "userEnteredFormat.backgroundColor"}},
         {"repeatCell": {
             "range": {"sheetId": sid, "startRowIndex": t2_hdr - 2, "endRowIndex": t2_hdr,
-                      "startColumnIndex": 3, "endColumnIndex": 7},
+                      "startColumnIndex": 3, "endColumnIndex": 9},
             "cell": {"userEnteredFormat": {"textFormat": {"bold": True}, "wrapStrategy": "WRAP",
                                            "horizontalAlignment": "CENTER"}},
             "fields": "userEnteredFormat(textFormat.bold,wrapStrategy,horizontalAlignment)"}},
     ]
-    # post vs pre on each pair: E vs D, G vs F (0-based col of the POST cell)
+    # post vs pre on each pair: E vs D, G vs F, I vs H (0-based col of the POST cell)
     for i, row in enumerate(t2_body + [t2_tot]):
         rr = (t2[ORDER[i]] if i < len(ORDER) else t2_total) - 1
-        for k, col in ((0, 4), (2, 6)):
+        for k, col in ((0, 4), (2, 6), (4, 8)):
             pre_s, post_s = row[k], row[k + 1]
             if pre_s == "-" or post_s == "-":
                 continue
@@ -388,7 +389,7 @@ def main():
           % ("all rows match" if not mismatch else "%d MISMATCH row(s)" % len(mismatch)))
     for b, got, want in mismatch:
         print("   MISMATCH %-22s sheet %s  script %s" % (name(b) if isinstance(b, tuple) else b, got, want))
-    print("  Table 2  (B2A pre/post, A2I pre/post)")
+    print("  Table 2  (B2A pre/post, A2I pre/post, B2I pre/post)")
     for b, row in zip(ORDER + ["Total"], t2_body + [t2_tot]):
         print("   %-22s %s" % (name(b) if isinstance(b, tuple) else b, row))
     return 0

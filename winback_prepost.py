@@ -51,7 +51,7 @@ WHITE = {"red": 1, "green": 1, "blue": 1}
 
 # Layout is driven off the KPI count -- adding a KPI used to silently collide with the
 # MOVEMENT heading below it.
-N_KPIS = 9
+N_KPIS = 12
 KPI_ROW0 = 5                                               # sheet row of the first KPI
 N_MOVE = 4                                                 # B2A, A2I, B2I lines + caveat
 MOVE_ROW = KPI_ROW0 + N_KPIS + 1                           # blank line, then the heading
@@ -219,6 +219,7 @@ def main():
     inst = fetch_installs(rows, today)
 
     body, colours = [], []
+    hagg = {"pl": 0, "pa": 0, "pi": 0, "ql": 0, "qa": 0, "qi": 0}   # hard-winback CSPs only
     agg = {"pl": 0, "pa": 0, "pi": 0, "ql": 0, "qa": 0, "qi": 0,
            "aug": 0, "aug_days": 0, "pinst": 0, "pdays": 0}
     move = {"asg": [0, 0, 0], "ins": [0, 0, 0], "b2i": [0, 0, 0]}            # improved, declined, flat/none
@@ -260,6 +261,9 @@ def main():
             hard = "Yes" if float(post_b2i.rstrip("%")) > float(pre_b2i.rstrip("%")) else "-"
         if hard == "Yes":
             hard_count[0] += 1
+            # pooled funnel of the hard-winback CSPs only (user, 16-Sep)
+            for k, v in zip(("pl", "pa", "pi", "ql", "qa", "qi"), (pl, pa, pi, ql, qa, qi)):
+                hagg[k] += v
 
         body.append([r["csp"], r["name"], r["date_raw"] or "-",
                      cnt(active.get(r["csp"], 0)),
@@ -368,6 +372,12 @@ def main():
         ("Active base", "{:,}".format(active_total)),
         ("Recoverable leads", "{:,}".format(recov_total)),
         ("Hard winback", str(hard_count[0])),
+        ("    hard winback only · B2A %  pre → post",
+         "%s → %s" % (pct(hagg["pa"], hagg["pl"]), pct(hagg["qa"], hagg["ql"]))),
+        ("    hard winback only · A2I %  pre → post",
+         "%s → %s" % (pct(hagg["pi"], hagg["pa"]), pct(hagg["qi"], hagg["qa"]))),
+        ("    hard winback only · B2I %  pre → post",
+         "%s → %s" % (pct(hagg["pi"], hagg["pl"]), pct(hagg["qi"], hagg["ql"]))),
         ("B2A %  pre \u2192 post", "%s \u2192 %s" % (pct(agg["pa"], agg["pl"]), pct(agg["qa"], agg["ql"]))),
         ("A2I %  pre \u2192 post", "%s \u2192 %s" % (pct(agg["pi"], agg["pa"]), pct(agg["qi"], agg["qa"]))),
         ("B2I %  pre → post", "%s → %s" % (pct(agg["pi"], agg["pl"]), pct(agg["qi"], agg["ql"]))),
@@ -376,10 +386,14 @@ def main():
         ("Monthly run-rate added", ""),
     ]
     # the pre -> post rows get the same green/red rule as the table
-    kpi_move = {5: (pct(agg["pa"], agg["pl"]), pct(agg["qa"], agg["ql"])),
-                6: (pct(agg["pi"], agg["pa"]), pct(agg["qi"], agg["qa"])),
-                7: (pct(agg["pi"], agg["pl"]), pct(agg["qi"], agg["ql"])),
-                8: (str(t_aug), str(t_post))}
+    # keyed by position in kpis, resolved from the labels so adding a KPI can't misalign colours
+    kpi_move = {}
+    for i, (lab, val) in enumerate(kpis):
+        if "→" in val and "%" in val:
+            a_s, b_s = [x.strip() for x in val.split("→")]
+            kpi_move[i] = (a_s, b_s)
+        elif lab == "Monthly run-rate added":
+            kpi_move[i] = (str(t_aug), str(t_post))
     ia, ja = ipd_col("Aug\nInstalls/day"), ipd_col("Post\nInstalls/day")
     f_runrate = ('=LET(a,%s%d*30,b,%s%d*30,TEXT(b-a,"+#,##0;-#,##0")&" installs / month   ("&'
                  'TEXT(a,"#,##0")&" → "&TEXT(b,"#,##0")&")")' % (ia, total_row, ja, total_row))
