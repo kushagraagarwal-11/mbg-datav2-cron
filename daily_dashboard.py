@@ -43,7 +43,9 @@ TABLE 3  field visits by agent (user, 16-Sep) -- below Table 2, found by its tit
   A visit counts only once its "Soft Winback (Y/N)" is filled in (user, 16-Sep: a date with a
   blank outcome is a planned / unreported visit). Soft winback = that cell is Yes.
 
-TABLE 4  contacted x soft winback, 2x2 (user, 16-Sep) -- 3 rows below Table 3, moves with it
+TABLE 4  contacted x soft winback, 2x2 (user, 16-Sep) -- between Table 1 and Table 2 (user moved it
+  there): found by its title in column B; if the title is missing it goes in the T4_ROWS rows that end
+  two rows above Table 2's header, only if those cells are empty. Never grows: always T4_ROWS rows.
   Cohort: Table 1's TOF without Non_compliant = every CSP a tracker bucket owns (distinct CSP).
   Rows    Contacted: Yes = tracker 'Date of calling / visit' filled (called or visited), No = blank
   Columns Soft winback: Yes = tracker 'Soft Winback (Y/N)' = Y, No = anything else
@@ -257,7 +259,7 @@ def contact_table(sh, ws, start, member, trk, post):
     r0 = start - 1
     if ws.row_count < r0 + T4_ROWS + 6:
         ws.resize(rows=r0 + T4_ROWS + 6)
-    whole = {"sheetId": sid, "startRowIndex": r0, "endRowIndex": r0 + T4_ROWS + 5,
+    whole = {"sheetId": sid, "startRowIndex": r0, "endRowIndex": r0 + T4_ROWS,
              "startColumnIndex": 1, "endColumnIndex": 11}
     none = {"style": "NONE"}
     sh.batch_update({"requests": [
@@ -496,7 +498,7 @@ def main():
 
     # (bucket, KF/Field) per sheet row; B is merged down a pair, so blank B inherits
     keys, prev = [], ""
-    for r in ws.get_values("B1:C60"):
+    for r in ws.get_values("B1:C100"):
         b = r[0].strip() if len(r) > 0 else ""
         c = r[1].strip() if len(r) > 1 else ""
         lab = b if b else (prev if c else "")
@@ -655,9 +657,20 @@ def main():
                 "fields": "userEnteredFormat.backgroundColor"}})
     sh.batch_update({"requests": reqs})
 
-    t3_msg, t3_end = visits_table(gc, sh, ws, t2_total)
+    t3_msg, _ = visits_table(gc, sh, ws, t2_total)
     print("  " + t3_msg)
-    print("  " + contact_table(sh, ws, t3_end + 3, member, trk, post))
+    # Table 4 sits between Table 1 and Table 2 (above Table 2's two header rows + one gap row)
+    t4 = next((i + 1 for i in range(t1_total, t2_hdr - 1) if keys[i][0] == T4_TITLE), None)
+    if t4 is None:
+        t4 = t2_hdr - 2 - T4_ROWS
+        free = all(not v.strip() for r in ws.get_values("B%d:K%d" % (t4, t4 + T4_ROWS - 1)) for v in r)
+        if not free:
+            t4 = None
+    if t4 is None or t4 <= t1_total + 1 or t4 + T4_ROWS - 1 > t2_hdr - 2:
+        print("  WARNING: Table 4 skipped -- no room for %d rows between Table 1 (ends r%d) and Table 2 "
+              "(header r%d); insert rows above Table 2" % (T4_ROWS, t1_total, t2_hdr - 1))
+    else:
+        print("  " + contact_table(sh, ws, t4, member, trk, post))
     print("  Table 1  formula-driven, not written. cross-check vs script: %s"
           % ("all rows match" if not mismatch else "%d MISMATCH row(s)" % len(mismatch)))
     for b, got, want in mismatch:
