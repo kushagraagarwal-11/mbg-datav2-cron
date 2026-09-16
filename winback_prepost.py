@@ -51,7 +51,7 @@ WHITE = {"red": 1, "green": 1, "blue": 1}
 
 # Layout is driven off the KPI count -- adding a KPI used to silently collide with the
 # MOVEMENT heading below it.
-N_KPIS = 12
+N_KPIS = 13
 KPI_ROW0 = 5                                               # sheet row of the first KPI
 N_MOVE = 4                                                 # B2A, A2I, B2I lines + caveat
 MOVE_ROW = KPI_ROW0 + N_KPIS + 1                           # blank line, then the heading
@@ -368,6 +368,9 @@ def main():
 
     kpis = [
         ("CSPs on soft winback", str(len(rows))),
+        # user, 16-Sep: net winback = soft winback minus those now doing WORSE than pre, judged on
+        # B2I (the same yardstick as hard winback). No-post-data / flat CSPs are not subtracted.
+        ("Net winback  (soft minus B2I worse than pre)", str(len(rows) - move["b2i"][1])),
         ("Called so far", str(len(dated))),
         ("Active base", "{:,}".format(active_total)),
         ("Recoverable leads", "{:,}".format(recov_total)),
