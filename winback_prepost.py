@@ -51,7 +51,7 @@ WHITE = {"red": 1, "green": 1, "blue": 1}
 
 # Layout is driven off the KPI count -- adding a KPI used to silently collide with the
 # MOVEMENT heading below it.
-N_KPIS = 13
+N_KPIS = 17
 KPI_ROW0 = 5                                               # sheet row of the first KPI
 N_MOVE = 4                                                 # B2A, A2I, B2I lines + caveat
 MOVE_ROW = KPI_ROW0 + N_KPIS + 1                           # blank line, then the heading
@@ -75,6 +75,7 @@ COL_POST_IPD = HDRS.index("Post\nInstalls/day") + 1
 #   Aug  = installs completed 1-31 Aug  / 31
 #   Post = installs completed from the call date to YESTERDAY / full days since the call
 AUG_START, AUG_END, AUG_DAYS = "2026-08-01", "2026-08-31", 31
+CAMPAIGN_START = dt.date(2026, 9, 8)          # post start for not-soft CSPs never called
 
 
 def parse_ddmm(s):
@@ -199,14 +200,22 @@ def main():
     sh = gc.open_by_key(SHEET_ID)
     src = sh.get_worksheet_by_id(SRC_GID)
 
-    rows = []
+    rows, others = [], {}
     for r in src.get_values("B4:AB2000"):
         def g(k):
             return r[k].strip() if len(r) > k else ""
-        if not g(0) or not g(8).upper().startswith("Y"):
+        if not g(0):
+            continue
+        if not g(8).upper().startswith("Y"):
+            # NOT soft winback (user, 16-Sep): same pre/post, post from the call date, or from the
+            # campaign start (8 Sep) if he was never called
+            others.setdefault(g(0), dict(csp=g(0), called=parse_ddmm(g(2)) or CAMPAIGN_START))
             continue
         rows.append(dict(csp=g(0), name=g(1), date_raw=g(2), recoverable=g(5),
                          soft=g(8), hard=g(26), called=parse_ddmm(g(2))))
+    for r in rows:                      # a CSP soft in one row and not in another counts as soft
+        others.pop(r["csp"], None)
+    others = list(others.values())
     if not rows:
         print("no soft-winback rows found; aborting without writing")
         return 1
@@ -217,6 +226,20 @@ def main():
     post = fetch_post(dated) if dated else {}
     today = dt.datetime.now(dt.timezone(dt.timedelta(hours=5, minutes=30))).date()
     inst = fetch_installs(rows, today)
+
+    # not-soft-winback funnel, pooled, and how many of them now do WORSE on B2I than pre
+    o_pre = fetch_pre({o["csp"] for o in others}) if others else {}
+    o_post = fetch_post(others) if others else {}
+    oagg = {"pl": 0, "pa": 0, "pi": 0, "ql": 0, "qa": 0, "qi": 0}
+    others_worse = 0
+    for o in others:
+        pl_, pa_, pi_ = o_pre.get(o["csp"], (0, 0, 0))
+        ql_, qa_, qi_ = o_post.get(o["csp"], (0, 0, 0))
+        for k, v in zip(("pl", "pa", "pi", "ql", "qa", "qi"), (pl_, pa_, pi_, ql_, qa_, qi_)):
+            oagg[k] += v
+        # same test as the MOVEMENT line: whole-number B2I, post below pre
+        if pl_ and ql_ and round(100.0 * qi_ / ql_) < round(100.0 * pi_ / pl_):
+            others_worse += 1
 
     body, colours = [], []
     hagg = {"pl": 0, "pa": 0, "pi": 0, "ql": 0, "qa": 0, "qi": 0}   # hard-winback CSPs only
@@ -368,9 +391,6 @@ def main():
 
     kpis = [
         ("CSPs on soft winback", str(len(rows))),
-        # user, 16-Sep: net winback = soft winback minus those now doing WORSE than pre, judged on
-        # B2I (the same yardstick as hard winback). No-post-data / flat CSPs are not subtracted.
-        ("Net winback  (soft minus B2I worse than pre)", str(len(rows) - move["b2i"][1])),
         ("Called so far", str(len(dated))),
         ("Active base", "{:,}".format(active_total)),
         ("Recoverable leads", "{:,}".format(recov_total)),
@@ -387,6 +407,18 @@ def main():
         # (post installs/day - Aug installs/day) x 30, off the Total row -- written below as a
         # live formula. A DIFFERENCE, not post/pre x 30: the ratio is a multiple, not installs.
         ("Monthly run-rate added", ""),
+        ("Not soft winback", "%d   (post from call date; 8 Sep if never called)" % len(others)),
+        ("    not soft winback · B2A %  pre → post",
+         "%s → %s" % (pct(oagg["pa"], oagg["pl"]), pct(oagg["qa"], oagg["ql"]))),
+        ("    not soft winback · A2I %  pre → post",
+         "%s → %s" % (pct(oagg["pi"], oagg["pa"]), pct(oagg["qi"], oagg["qa"]))),
+        ("    not soft winback · B2I %  pre → post",
+         "%s → %s" % (pct(oagg["pi"], oagg["pl"]), pct(oagg["qi"], oagg["ql"]))),
+        # user, 16-Sep: net winback = soft winback minus every tracker CSP now doing WORSE than
+        # pre on B2I -- soft AND not soft. Flat / no-post-data CSPs are not subtracted.
+        ("Net winback",
+         "%d   (%d soft − %d soft worse − %d not-soft worse, on B2I)" % (len(rows) - move["b2i"][1] - others_worse, len(rows),
+                                             move["b2i"][1], others_worse)),
     ]
     # the pre -> post rows get the same green/red rule as the table
     # keyed by position in kpis, resolved from the labels so adding a KPI can't misalign colours
