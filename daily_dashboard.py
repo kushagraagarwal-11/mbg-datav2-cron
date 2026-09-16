@@ -79,6 +79,8 @@ WHITE = {"red": 1, "green": 1, "blue": 1}
 VISIT_SHEET = "1WsADMo2slH0VZhCdBbAg2ortl6_AfTs-hSBvTBEoRto"
 VISITS_FROM = dt.date(2026, 9, 14)
 T3_TITLE = "Field visits by agent (Willing to Exit sheet)"
+# region owners, not field agents -- left out of Table 3 entirely (user, 16-Sep)
+T3_EXCLUDE = {"mumbai", "up east", "up west"}
 
 
 def visits_table(gc, sh, ws, t2_total):
@@ -102,6 +104,8 @@ def visits_table(gc, sh, ws, t2_total):
         if not g(i_id):
             continue
         a = g(i_own) or "(no owner)"
+        if a.lower() in T3_EXCLUDE:
+            continue
         if a not in agents:
             agents.append(a)
         d, _ = parse_visit(g(i_dt), today)
