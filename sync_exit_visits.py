@@ -9,7 +9,10 @@ SCOPE -- only tracker rows that are VISITED, not called:
   sheet (reviewer, 14-Sep: "visiting and exit u have to take dates from this sheet").
 
 Writes, per matching row (tracker columns found by header name in row 3 -- they move):
-    Date of calling / visit   <- Date of Visit      (overwritten -- the visit sheet owns it)
+    Date of calling / visit   <- Date of Visit      (overwritten -- the visit sheet owns it), taken
+                                 ONLY when that row's Soft Winback (Y/N) is filled in (user,
+                                 16-Sep: a date with a blank outcome is a planned / unreported
+                                 visit -- it is picked up on the first run after the agent fills it)
     Soft Winback (Y/N)        <- Soft Winback (Y/N) (normalised to Y / N)
     CI(m1)                    <- CI(m1)             (only when the tracker cell is blank)
     750                       <- 750                (only when the tracker cell is blank)
@@ -100,7 +103,7 @@ def main():
         print("ABORT: visit sheet headers moved: %r" % rows[0])
         return 1
 
-    src, skipped = {}, []
+    src, skipped, pending = {}, [], []
     for r in rows[1:]:
         def g(key):
             i = ix[key]
@@ -112,10 +115,14 @@ def main():
         if note:
             skipped.append((csp, note))
         soft = g("soft winback").upper()
+        if d and not soft:
+            pending.append(csp)
+            d = None
         src[csp] = {"visit": d.strftime("%d/%m/%Y") if d else "",
                     "soft": "Y" if soft.startswith("Y") else ("N" if soft.startswith("N") else ""),
                     "ci": g("ci(m1)"), "opt750": g("750")}
-    print("  visit sheet: %d CSPs" % len(src))
+    print("  visit sheet: %d CSPs | %d dated visits wait for a soft winback outcome (date not taken)"
+          % (len(src), len(pending)))
 
     ws = gc.open_by_key(SHEET_ID).get_worksheet_by_id(0)
     # Resolve every column by its header in row 3 -- columns get inserted (14-Sep: 'M1 offered'

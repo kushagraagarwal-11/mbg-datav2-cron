@@ -40,7 +40,8 @@ TABLE 3  field visits by agent (user, 16-Sep) -- below Table 2, found by its tit
   Source: 'Willing to Exit CSPs' sheet; agent = Owner Name, date = Date of Visit (read with the
   same parser as sync_exit_visits.py, so planned/future visits are not counted).
   Columns: one pair per day from 14 Sep to today -- Visits | Soft winback -- then a Total pair.
-  Soft winback = that visit's "Soft Winback (Y/N)" is Yes.
+  A visit counts only once its "Soft Winback (Y/N)" is filled in (user, 16-Sep: a date with a
+  blank outcome is a planned / unreported visit). Soft winback = that cell is Yes.
 """
 import re
 import sys
@@ -112,7 +113,7 @@ def visits_table(gc, sh, ws, t2_total):
         if a not in agents:
             agents.append(a)
         d, _ = parse_visit(g(i_dt), today)
-        if d is None or d < VISITS_FROM:
+        if d is None or d < VISITS_FROM or not g(i_sw):
             continue
         v = cnt.setdefault((a, d), [0, 0])
         v[0] += 1
