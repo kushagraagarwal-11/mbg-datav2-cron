@@ -16,6 +16,8 @@ BUCKETS  (tracker = 'Kushagra/Fahad Winback' tab)
   Non_compliant-> the 'Non_compliant list' tab minus CSPs any tracker category already owns,
                   all on BULK_DATE (8 Sep).
   PRECEDENCE: the tracker Category wins, then Non_compliant. No CSP is counted twice.
+  Categories 'Previous Good installers' and 'Non-compliant blocked' do NOT own a CSP: a
+  Non_compliant-list CSP under them stays in the Non_compliant row (same rule in the sheet formulas).
   'Wrong enforcement' was 'Ghost Install' until 14-Sep; the old name is still accepted.
 
 TABLE 1  per bucket: D = total, E.. = per date      *** FORMULA-DRIVEN IN THE SHEET ***
@@ -78,7 +80,11 @@ CAT2BUCKET = {"Winback _ 89 CSPs": "89 Winback",
               "750 opt out": "750 Opt out", "Growth Team": "Growth Team",
               "Wrong enforcement": "Wrong enforcement",
               "Ghost Install": "Wrong enforcement",      # old name
-              "Previous Good installers": None}
+              "Previous Good installers": None,
+              # a Non_compliant-list CSP the team works from the tracker (16-Sep: Giganet, hoarding
+              # blocked) -- stays in the Non_compliant row, so it must not "own" the CSP
+              "Non-compliant blocked": None}
+NOT_OWNING = {"Previous Good installers", "Non-compliant blocked"}
 # buckets whose KF / Field is fixed; every other bucket is split by tracker column F
 FIXED_MODE = {"Exit": "Field", "750 Opt out": "Field", "Wrong enforcement": "KF"}
 T2_COLS = "D%d:I%d"
@@ -552,7 +558,7 @@ def main():
     for csp, t in trk.items():
         if t["cat"] not in CAT2BUCKET:
             unknown.add(t["cat"])
-        if t["cat"] != "Previous Good installers":
+        if t["cat"] not in NOT_OWNING:
             owned.add(csp)
         base = CAT2BUCKET.get(t["cat"])
         if base:
