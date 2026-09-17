@@ -54,6 +54,9 @@ TABLE 4  contacted x soft winback, 2x2 (user, 16-Sep) -- between Table 1 and Tab
   Rows    Contacted: Yes = tracker 'Date of calling / visit' filled (called or visited), No = blank
   Columns Soft winback: Yes = tracker 'Soft Winback (Y/N)' = Y, No = anything else
   Each box: CSP count, and B2A / A2I / B2I pre -> post, pooled over the box's CSPs.
+  Every CSP count carries its active base in brackets (user, 17-Sep) = sum of the latest Quality OS
+  ACTIVE_CONNECTION_COUNT, the Pre/Post Winback tab's "Active base". Column headers and row labels
+  carry their totals (soft winback Yes / No, contacted Yes / No).
   Pre  = 2026-09-01 .. 2026-09-07 (first week of September -- NOT Table 2's August week)
   Post = contact date -> now; a CSP never contacted has no contact date, so his post starts on
          8 Sep (campaign start, the day after the pre week). Leads aged 48h, as in Table 2.
@@ -243,6 +246,16 @@ def contact_table(sh, ws, start, member, trk, post):
     box = {}
     for c in ids:
         box.setdefault((bool(trk[c]["date"]), trk[c]["soft"].upper().startswith("Y")), []).append(c)
+    from winback_prepost import fetch_active
+    active = fetch_active(ids)
+
+    def cnt(cs):
+        return len(cs), sum(active.get(c, 0) for c in cs)
+
+    def group(want_contacted=None, want_soft=None):
+        return [c for (ct, sf), cs in box.items() for c in cs
+                if (want_contacted is None or ct == want_contacted)
+                and (want_soft is None or sf == want_soft)]
 
     def funnel(cs):
         pl = pa = pi = ql = qa = qi = 0
@@ -253,19 +266,34 @@ def contact_table(sh, ws, start, member, trk, post):
                 ("B2I", pct(pi, pl), pct(qi, ql))]
 
     # B:C row label, D:G soft winback Yes, H:K soft winback No
+    n_all, a_all = cnt(ids)
+    rich = []                                          # (0-based row, 0-based col, text, bold chars)
+    top = ["Contacted  (visited / called)", "", "", "", "", "", "", "", "", ""]
+    for j, soft in enumerate((True, False)):
+        head = "Soft winback: %s" % ("Yes" if soft else "No")
+        n_, a_ = cnt(group(want_soft=soft))
+        top[2 + 4 * j] = "%s\n%d CSPs  (active base %s)" % (head, n_, "{:,}".format(a_))
+        rich.append((start + 1, 1 + 2 + 4 * j, top[2 + 4 * j], len(head)))
     vals = [[T4_TITLE] + [""] * 9,
-            ["%d CSPs · Contacted = date of calling / visit filled · Pre = 1-7 Sep · Post = contact "
-             "date -> now (not contacted: 8 Sep -> now) · leads aged 48h" % len(ids)] + [""] * 9,
-            ["Contacted  (visited / called)", "", "Soft winback: Yes", "", "", "",
-             "Soft winback: No", "", "", ""],
+            ["%d CSPs (active base %s) · Contacted = date of calling / visit filled · Pre = 1-7 Sep · "
+             "Post = contact date -> now (not contacted: 8 Sep -> now) · leads aged 48h"
+             % (n_all, "{:,}".format(a_all))] + [""] * 9,
+            top,
             ["", "", "CSPs", "Metric", "Pre", "Post", "CSPs", "Metric", "Pre", "Post"]]
     colour = []                                         # (0-based row, 0-based col, pre, post)
     for k, contacted in enumerate((True, False)):
-        rows = [["Yes" if contacted else "No", ""] + [""] * 8 for _ in range(3)]
+        n_, a_ = cnt(group(want_contacted=contacted))
+        lab = "Yes" if contacted else "No"
+        lab_txt = "%s\n%d CSPs\n(active base %s)" % (lab, n_, "{:,}".format(a_))
+        rich.append((start - 1 + 4 + 3 * k, 1, lab_txt, len(lab)))
+        rows = [[lab_txt, ""] + [""] * 8 for _ in range(3)]
+        rows[1][0] = rows[2][0] = ""
         for j, soft in enumerate((True, False)):
             cs = box.get((contacted, soft), [])
             c0 = 2 + 4 * j
-            rows[0][c0] = len(cs)
+            n_, a_ = cnt(cs)
+            rows[0][c0] = "%d\n(active base %s)" % (n_, "{:,}".format(a_))
+            rich.append((start - 1 + 4 + 3 * k, 1 + c0, rows[0][c0], len(str(n_))))
             for m, (lab, a, b_) in enumerate(funnel(cs)):
                 rows[m][c0 + 1:c0 + 4] = [lab, a, b_]
                 colour.append((start - 1 + 4 + 3 * k + m, 1 + c0 + 3, a, b_))
@@ -336,6 +364,14 @@ def contact_table(sh, ws, start, member, trk, post):
             reqs.append({"repeatCell": {"range": m, "cell": {"userEnteredFormat": {
                 "textFormat": {"bold": True, "fontSize": 12}}},
                 "fields": "userEnteredFormat.textFormat(bold,fontSize)"}})
+    for rr, cc, txt, nb in rich:                       # first line bold, the rest plain + small
+        reqs.append({"updateCells": {
+            "range": rng(rr, rr + 1, cc, cc + 1),
+            "rows": [{"values": [{"userEnteredValue": {"stringValue": txt},
+                                  "textFormatRuns": [{"startIndex": 0, "format": {"bold": True}},
+                                                     {"startIndex": nb, "format": {"bold": False,
+                                                                                    "fontSize": 9}}]}]}],
+            "fields": "userEnteredValue,textFormatRuns"}})
     for rr, cc, a, b_ in colour:
         if a == "-" or b_ == "-" or a == b_:
             continue
@@ -346,12 +382,13 @@ def contact_table(sh, ws, start, member, trk, post):
     sh.batch_update({"requests": reqs})
 
     dated = [trk[c]["date"] for c in ids if trk[c]["date"]]
-    lines = ["Table 4 at row %d: %d CSPs (earliest contact %s)" % (start, len(ids), min(dated) if dated else "-")]
+    lines = ["Table 4 at row %d: %d CSPs, active base %d (earliest contact %s)"
+             % (start, n_all, a_all, min(dated) if dated else "-")]
     for contacted in (True, False):
         for soft in (True, False):
             cs = box.get((contacted, soft), [])
-            lines.append("   contacted %-3s soft %-3s %4d CSPs  %s" % (
-                "Yes" if contacted else "No", "Yes" if soft else "No", len(cs),
+            lines.append("   contacted %-3s soft %-3s %4d CSPs (active %6d)  %s" % (
+                "Yes" if contacted else "No", "Yes" if soft else "No", len(cs), cnt(cs)[1],
                 "  ".join("%s %s->%s" % f for f in funnel(cs))))
     return "\n".join(lines)
 
