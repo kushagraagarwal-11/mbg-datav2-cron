@@ -119,7 +119,7 @@ def main():
     be = {r[0]: r[1] for r in mb(
         f"SELECT CSP_ID, TO_CHAR(CONVERT_TIMEZONE('Asia/Kolkata',CONSENT_TIMESTAMP),'DD-Mon HH24:MI') "
         f"FROM PROD_DB.CSP_RV_SERVICE_CSP_RV_SERVICE.DOMINANCE_CONSENT "
-        f"WHERE CONSENT_CHOICE='OPTED_IN' AND COALESCE(_FIVETRAN_DELETED,FALSE)=FALSE AND CSP_ID IN ({inlist}) "
+        f"WHERE CONSENT_CHOICE='OPTED_IN' AND _FIVETRAN_ACTIVE AND CSP_ID IN ({inlist}) "
         f"AND CONSENT_TIMESTAMP >= '{START_TS} +05:30'::timestamp_tz")}
 
     viewed = ev_ts("Payout750_Viewed")

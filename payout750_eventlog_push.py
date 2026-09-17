@@ -124,7 +124,7 @@ def backend_optins(from_ts):
     ist = f"{r[0:4]}-{r[4:6]}-{r[6:8]} {r[8:10]}:{r[10:12]}:{r[12:14]}"
     sql = ("SELECT CSP_ID, TO_CHAR(CONVERT_TIMEZONE('Asia/Kolkata', MAX(CONSENT_TIMESTAMP)), 'YYYY-MM-DD HH24:MI:SS') "
            "FROM PROD_DB.CSP_RV_SERVICE_CSP_RV_SERVICE.DOMINANCE_CONSENT "
-           "WHERE CONSENT_CHOICE='OPTED_IN' AND COALESCE(_FIVETRAN_DELETED,FALSE)=FALSE "
+           "WHERE CONSENT_CHOICE='OPTED_IN' AND _FIVETRAN_ACTIVE "
            f"AND CONSENT_TIMESTAMP >= '{ist} +05:30'::timestamp_tz "
            "AND CSP_ID NOT ILIKE 'TEST%' AND CSP_ID != 'a0a0b1' "   # drop test/junk consent rows
            "GROUP BY CSP_ID ORDER BY 2")

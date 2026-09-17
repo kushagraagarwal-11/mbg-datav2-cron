@@ -87,7 +87,7 @@ def main():
         inlist = ",".join("'%s'" % c.replace("'", "") for c in clicks)
         for r in mb(f"SELECT CSP_ID, TO_CHAR(CONVERT_TIMEZONE('Asia/Kolkata',CONSENT_TIMESTAMP),'YYYY-MM-DD HH24:MI') "
                     f"FROM PROD_DB.CSP_RV_SERVICE_CSP_RV_SERVICE.DOMINANCE_CONSENT WHERE CONSENT_CHOICE='OPTED_IN' "
-                    f"AND COALESCE(_FIVETRAN_DELETED,FALSE)=FALSE AND CSP_ID IN ({inlist}) "
+                    f"AND _FIVETRAN_ACTIVE AND CSP_ID IN ({inlist}) "
                     f"AND CONSENT_TIMESTAMP >= '{PUSH_SINCE_TS} +05:30'::timestamp_tz"):
             opted[r[0]] = r[1]
     # names + mobile from CSP_ACCOUNT + Design

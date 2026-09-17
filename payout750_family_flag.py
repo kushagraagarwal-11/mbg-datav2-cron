@@ -78,7 +78,7 @@ def main():
     #    (CleverTap banner event). Either accept or reject by any family member flags the CSP.
     opted = set(str(r[0]) for r in mb(
         "SELECT DISTINCT CSP_ID FROM PROD_DB.CSP_RV_SERVICE_CSP_RV_SERVICE.DOMINANCE_CONSENT "
-        "WHERE CONSENT_CHOICE='OPTED_IN' AND COALESCE(_FIVETRAN_DELETED,FALSE)=FALSE AND CSP_ID IS NOT NULL"))
+        "WHERE CONSENT_CHOICE='OPTED_IN' AND _FIVETRAN_ACTIVE AND CSP_ID IS NOT NULL"))
     declined_map = declined_cspids()
     declined = set(declined_map)
     # a NEW decline (declined AGAIN in the re-pitch round) = declined at/after REDECLINE_FROM
