@@ -16,7 +16,8 @@ BUCKETS  (tracker = 'Kushagra/Fahad Winback' tab)
   Non_compliant-> the 'Non_compliant list' tab minus CSPs any tracker category already owns,
                   all on BULK_DATE (8 Sep).
   PRECEDENCE: the tracker Category wins, then Non_compliant. No CSP is counted twice.
-  Categories 'Previous Good installers' and 'Non-compliant blocked' do NOT own a CSP: a
+  Categories 'Previous Good installers', 'Non-compliant blocked' and 'Delivery receipt pending'
+  do NOT own a CSP: a
   Non_compliant-list CSP under them stays in the Non_compliant row (same rule in the sheet formulas).
   'Wrong enforcement' was 'Ghost Install' until 14-Sep; the old name is still accepted.
 
@@ -88,8 +89,10 @@ CAT2BUCKET = {"Winback _ 89 CSPs": "89 Winback",
               "Previous Good installers": None,
               # a Non_compliant-list CSP the team works from the tracker (16-Sep: Giganet, hoarding
               # blocked) -- stays in the Non_compliant row, so it must not "own" the CSP
-              "Non-compliant blocked": None}
-NOT_OWNING = {"Previous Good installers", "Non-compliant blocked"}
+              "Non-compliant blocked": None,
+              # auto-added by netbox_funnel.py: courier delivered, app receipt not accepted (17-Sep)
+              "Delivery receipt pending": None}
+NOT_OWNING = {"Previous Good installers", "Non-compliant blocked", "Delivery receipt pending"}
 # buckets whose KF / Field is fixed; every other bucket is split by tracker column F
 FIXED_MODE = {"Exit": "Field", "750 Opt out": "Field", "Wrong enforcement": "KF"}
 T2_COLS = "D%d:I%d"

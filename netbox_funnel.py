@@ -36,6 +36,13 @@ STAGES (nested -- each stage is a subset of the one above)
                            confirmed-at = the first history version with STATUS = FULFILLED.
                            Until he confirms, the app also blocks his next order (prior receipt).
   6  Installed after confirmation   >=1 install completed at/after his first confirmation
+
+RECEIPT NOT ACCEPTED (user, 17-Sep) -- per-CSP column "Delivered, receipt not accepted": orders the
+courier delivered (dispatch tracker) that the app still does not show as received (status not
+FULFILLED / CANCELLED / REJECTED). Such a CSP cannot install those devices. Every run appends a
+'Kushagra/Fahad Winback' row (Category 'Delivery receipt pending', Winback) for each such CSP that
+has no tracker row yet -- never edits or removes existing rows. The CSP consoles' 2-hourly refresh
+reads this column to put them in the Winback Calls console with the "stuck installing" label.
   Per stage also: active base (latest Quality OS snapshot), installs 25-31 Aug (last week of
   August) and installs since 8 Sep -- summed over that stage's CSPs -- each with a per-day
   average: Aug / 7; since 8 Sep / exact days elapsed since 8 Sep 00:00 IST (count runs to now).
@@ -62,10 +69,14 @@ HDRS = ["CSP ID", "CSP Name", "Active\nbase", "Eligible to\norder",
         "Blocked: holds enough\ndevices (days)", "Orders placed\nsince 8 Sep",
         "Devices\nrequested", "Orders delivered\n(courier)", "Delivered on\n(courier)",
         "Orders confirmed\nin app", "Devices\nconfirmed", "First confirmed\nin app on",
+        "Delivered, receipt\nnot accepted",
         "Installs\n25-31 Aug", "Installs\nsince 8 Sep", "Installs after\nconfirmation",
         "Netboxes\nin hand now", "Latest order\nstatus (app)"]
 TRACKER_CSV = ("https://docs.google.com/spreadsheets/d/e/2PACX-1vSwYnbFT8HzwkFZQR1DuERtmuNbeI1fBOqihf_"
                "9OJigB7-RwKzyvUUTi66Q3wUxfwcU6EfVHWK3HMGN/pub?gid=0&single=true&output=csv")
+
+RECEIPT_CAT = "Delivery receipt pending"
+NOT_PENDING = ("FULFILLED", "CANCELLED", "REJECTED")
 
 INK = {"red": 0.09, "green": 0.24, "blue": 0.20}
 MUTED = {"red": 0.42, "green": 0.46, "blue": 0.45}
@@ -164,6 +175,38 @@ def fetch_free_ont(ids, days):
     return out
 
 
+def add_receipt_pending_rows(sh, stuck, names):
+    """Append a tracker row for each stuck CSP that has none yet. Returns the CSPs added."""
+    if not stuck:
+        return []
+    t = sh.get_worksheet_by_id(0)
+    row3 = [c.strip() for c in t.get_values("A3:AP3")[0]]
+    need = ["CSP ID", "CSP Name", "Category", "Winback and Visiting"]
+    if any(row3.count(h) != 1 for h in need):
+        print("  receipt-pending: tracker headers moved -- nothing added")
+        return []
+    pos = {h: row3.index(h) for h in need}
+    col = lambda i: gspread.utils.rowcol_to_a1(1, i + 1).rstrip("1")
+    ids = t.get_values("%s4:%s3000" % (col(pos["CSP ID"]), col(pos["CSP ID"])))
+    have = {r[0].strip() for r in ids if r and r[0].strip()}
+    new = [c for c in sorted(stuck) if c not in have]
+    if not new:
+        return []
+    start = max((i for i, r in enumerate(ids, 4) if r and r[0].strip()), default=3) + 1
+    lo, hi = min(pos.values()), max(pos.values())
+    blk = t.get_values("%s%d:%s%d" % (col(lo), start, col(hi), start + len(new) - 1))
+    if any(v.strip() for r in blk for v in r):
+        print("  receipt-pending: tracker rows %d+ are not empty -- nothing added" % start)
+        return []
+    data = []
+    for k, c in enumerate(new):
+        for h, v in (("CSP ID", c), ("CSP Name", names.get(c, "")), ("Category", RECEIPT_CAT),
+                     ("Winback and Visiting", "Winback")):
+            data.append({"range": "%s%d" % (col(pos[h]), start + k), "values": [[v]]})
+    t.batch_update(data, value_input_option="RAW")
+    return new
+
+
 def fetch_tracker():
     """dispatch_ref -> (delivery status, delivered date) from the dispatch tracker's sheet."""
     import csv, io, requests
@@ -251,7 +294,7 @@ def main():
                 n_b += 1
         return n_b, last
 
-    body, per = [], {}
+    body, per, stuck = [], {}, set()
     st = {"elig": set(), "blocked": set(), "net": set(), "placed": set(), "courier": set(),
           "deliv": set(), "inst": set()}
     vol = dict(orders=0, req=0, cour_orders=0, cour_dev=0, deliv_orders=0, deliv_dev=0,
@@ -264,6 +307,9 @@ def main():
             x["courier"] = tstat.lower() == "delivered" or x["status"] == "FULFILLED"
             x["courier_date"] = tdate
         cour = [x for x in o if x["courier"]]
+        pend = [x for x in cour if x["status"] not in NOT_PENDING]      # delivered, not accepted
+        if pend:
+            stuck.add(c)
         cour_dates = [x["courier_date"] for x in cour if x["courier_date"]]
         first_deliv = min((x["delivered"] for x in deliv if x["delivered"]), default=None)
         all_ins = installs.get(c, [])
@@ -301,6 +347,7 @@ def main():
                      min(cour_dates).strftime("%d %b") if cour_dates else "-",
                      len(deliv), sum(x["appr"] for x in deliv),
                      first_deliv.astimezone(IST).strftime("%d %b") if first_deliv else "-",
+                     len(pend),
                      len(aug), len(ins), len(after) if first_deliv else "-", netbox.get(c, 0), latest])
 
     n = len(ids)
@@ -333,6 +380,8 @@ def main():
     # elapsed since 8 Sep 00:00 IST (e.g. 8.7 days), not a whole-day count
     days_since = (now - start_dt).total_seconds() / 86400.0
 
+    if ws.col_count < len(HDRS) + 2:
+        ws.resize(cols=len(HDRS) + 2)
     ws.clear()
     wipe = {"sheetId": ws.id, "startRowIndex": 0, "endRowIndex": max(ws.row_count, 200),
             "startColumnIndex": 0, "endColumnIndex": max(ws.col_count, 16)}
@@ -426,7 +475,7 @@ def main():
     reqs.append({"mergeCells": {"range": {"sheetId": sid, "startRowIndex": 4, "endRowIndex": 5,
                                           "startColumnIndex": 1, "endColumnIndex": 3},
                                 "mergeType": "MERGE_ALL"}})
-    for idx, w in enumerate([80, 190, 80, 80, 110, 90, 110, 110, 130, 90, 90, 90, 90, 90, 90, 80, 100]):
+    for idx, w in enumerate([80, 190, 80, 80, 110, 90, 110, 110, 130, 90, 90, 90, 110, 90, 90, 90, 80, 100]):
         reqs.append({"updateDimensionProperties": {
             "range": {"sheetId": sid, "dimension": "COLUMNS", "startIndex": 1 + idx, "endIndex": 2 + idx},
             "properties": {"pixelSize": w}, "fields": "pixelSize"}})
@@ -460,6 +509,9 @@ def main():
     sh.batch_update({"requests": reqs})
 
     print("netbox funnel: %s | vol %s" % ([(s[0], s[1]) for s in stages], vol))
+    added = add_receipt_pending_rows(sh, stuck, names)
+    print("  receipt not accepted: %d CSPs %s | tracker rows added: %s"
+          % (len(stuck), sorted(stuck), added or "none"))
     stamp(ws)
     return 0
 
