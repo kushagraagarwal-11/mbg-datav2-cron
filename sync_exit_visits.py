@@ -99,7 +99,15 @@ def main():
     hdr = [c.strip().lower() for c in rows[0]]
     ix = {k: next((i for i, h in enumerate(hdr) if k in h), None)
           for k in ("csp id", "date of visit", "soft winback", "ci(m1)", "750")}
-    if ix["csp id"] is None or ix["date of visit"] is None:
+    # CSP IDs always live in column A. Its header cell gets pasted over (17-Sep: an address sat in
+    # A1 and this sync aborted from 12:15), so A is fixed -- same rule as the console's
+    # sync_visiting_sheet.py. Every other column is still found by its header.
+    ids_a = [r[0].strip() for r in rows[1:] if r and r[0].strip()]
+    if ids_a and sum(1 for v in ids_a if re.fullmatch(r"a0[a-z0-9]{4}", v)) < 0.9 * len(ids_a):
+        print("ABORT: column A no longer holds CSP IDs: %r" % ids_a[:5])
+        return 1
+    ix["csp id"] = 0
+    if ix["date of visit"] is None:
         print("ABORT: visit sheet headers moved: %r" % rows[0])
         return 1
 

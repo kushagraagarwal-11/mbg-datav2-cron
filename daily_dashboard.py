@@ -121,7 +121,8 @@ def visits_table(gc, sh, ws, t2_total):
         if len(hits) != 1:
             raise RuntimeError("visit sheet header %r found %d times" % (name, len(hits)))
         return hits[0]
-    i_id, i_own, i_dt, i_sw = col("csp id"), col("owner name"), col("date of visit"), col("soft winback (y/n)")
+    # CSP ID is always column A (its header cell gets pasted over -- 17-Sep); the rest by header
+    i_id, i_own, i_dt, i_sw = 0, col("owner name"), col("date of visit"), col("soft winback (y/n)")
     days = [VISITS_FROM + dt.timedelta(days=k) for k in range((today - VISITS_FROM).days + 1)]
     agents, cnt = [], {}
     for r in src[1:]:
