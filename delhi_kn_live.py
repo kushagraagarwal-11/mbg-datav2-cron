@@ -80,7 +80,7 @@ def main():
     if not CSPS: raise SystemExit("no CSP rows found")
     il = ",".join("'%s'" % c for c in CSPS)
 
-    opted = {r[0] for r in mb(f"SELECT DISTINCT CSP_ID FROM PROD_DB.CSP_RV_SERVICE_CSP_RV_SERVICE.DOMINANCE_CONSENT WHERE CONSENT_CHOICE='OPTED_IN' AND COALESCE(_FIVETRAN_DELETED,FALSE)=FALSE AND CSP_ID IN ({il})")}
+    opted = {r[0] for r in mb(f"SELECT DISTINCT CSP_ID FROM PROD_DB.CSP_RV_SERVICE_CSP_RV_SERVICE.DOMINANCE_CONSENT WHERE CONSENT_CHOICE='OPTED_IN' AND _FIVETRAN_ACTIVE AND CSP_ID IN ({il})")}
     confirmed = (cspset("Payout750_Confirmed", scope=CSPS) | cspset("Payout750_Closed", "new", scope=CSPS))
     attempted = confirmed - opted
     declined = (cspset("Payout750_Declined", scope=CSPS) | cspset("Payout750_Closed", "later", scope=CSPS)) - opted - attempted
