@@ -58,6 +58,10 @@ TABLE 4  contacted x soft winback, 2x2 (user, 16-Sep) -- between Table 1 and Tab
   Every CSP count carries its active base in brackets (user, 17-Sep) = sum of the latest Quality OS
   ACTIVE_CONNECTION_COUNT, the Pre/Post Winback tab's "Active base". Column headers and row labels
   carry their totals (soft winback Yes / No, contacted Yes / No).
+  FILTER (user, 17-Sep): dropdown in column A of the note row (A21) = Both / Winback / Visiting
+  (Winback = KF, Visiting = Field, the Table 1 split). All three views are written to the hidden
+  tab 'Daily Dashboard data'; the visible cells are CHOOSE formulas on the dropdown, and the
+  post-vs-pre colours are conditional formats, so switching views needs no refresh.
   Pre  = 2026-09-01 .. 2026-09-07 (first week of September -- NOT Table 2's August week)
   Post = contact date -> now; a CSP never contacted has no contact date, so his post starts on
          8 Sep (campaign start, the day after the pre week). Leads aged 48h, as in Table 2.
@@ -239,72 +243,98 @@ def visits_table(gc, sh, ws, t2_total):
 T4_TITLE = "Contacted x Soft winback  (TOF without Non_compliant)"
 T4_PRE = ("2026-09-01", "2026-09-07")
 T4_ROWS = 10                                            # title, note, 2 headers, 2 x 3 box rows
+T4_VIEWS = ("Both", "Winback", "Visiting")              # dropdown in column A of the note row
+T4_HELPER = "Daily Dashboard data"                      # hidden tab holding one block per view
+T4_STEP = T4_ROWS + 2                                   # helper rows per view block
 
 
-def contact_table(sh, ws, start, member, trk, post):
-    """Rewrite Table 4 (2x2 contacted x soft winback) with its title on row `start`."""
-    ids = sorted(c for c, b in member.items() if b != NC)
-    pre = fetch_pre(ids, *T4_PRE)
+def contact_table(gc, sh, ws, start, member, trk, post):
+    """Rewrite Table 4 (2x2 contacted x soft winback) with its title on row `start`.
+    Every view (Both / Winback / Visiting) is computed here and written to the hidden helper tab;
+    the visible cells are formulas that pick the block named in the dropdown A{start+1}.
+    Winback / Visiting = the dashboard's KF / Field split (Table 1 column C)."""
+    ids_all = sorted(c for c, b in member.items() if b != NC)
+    pre = fetch_pre(ids_all, *T4_PRE)
     post = dict(post)
-    post.update(fetch_post([(c, BULK_DATE) for c in ids if not trk[c]["date"]]))
-    box = {}
-    for c in ids:
-        box.setdefault((bool(trk[c]["date"]), trk[c]["soft"].upper().startswith("Y")), []).append(c)
+    post.update(fetch_post([(c, BULK_DATE) for c in ids_all if not trk[c]["date"]]))
     from winback_prepost import fetch_active
-    active = fetch_active(ids)
-
-    def cnt(cs):
-        return len(cs), sum(active.get(c, 0) for c in cs)
-
-    def group(want_contacted=None, want_soft=None):
-        return [c for (ct, sf), cs in box.items() for c in cs
-                if (want_contacted is None or ct == want_contacted)
-                and (want_soft is None or sf == want_soft)]
+    active = fetch_active(ids_all)
+    fmt_n = "{:,}".format
 
     def funnel(cs):
         pl = pa = pi = ql = qa = qi = 0
         for c in cs:
             a, s_, i2 = pre.get(c, (0, 0, 0)); pl += a; pa += s_; pi += i2
             a, s_, i2 = post.get(c, (0, 0, 0)); ql += a; qa += s_; qi += i2
-        return [("B2A", pct(pa, pl), pct(qa, ql)), ("A2I", pct(pi, pa), pct(qi, qa)),
-                ("B2I", pct(pi, pl), pct(qi, ql))]
+        r = lambda n, d: round(float(n) / d, 2) if d else "-"
+        return [("B2A", r(pa, pl), r(qa, ql)), ("A2I", r(pi, pa), r(qi, qa)), ("B2I", r(pi, pl), r(qi, ql))]
 
-    # B:C row label, D:G soft winback Yes, H:K soft winback No
-    n_all, a_all = cnt(ids)
-    rich = []                                          # (0-based row, 0-based col, text, bold chars)
-    top = ["Contacted  (visited / called)", "", "", "", "", "", "", "", "", ""]
-    for j, soft in enumerate((True, False)):
-        head = "Soft winback: %s" % ("Yes" if soft else "No")
-        n_, a_ = cnt(group(want_soft=soft))
-        top[2 + 4 * j] = "%s\n%d CSPs  (active base %s)" % (head, n_, "{:,}".format(a_))
-        rich.append((start + 1, 1 + 2 + 4 * j, top[2 + 4 * j], len(head)))
-    vals = [[T4_TITLE] + [""] * 9,
-            ["%d CSPs (active base %s) · Contacted = date of calling / visit filled · Pre = 1-7 Sep · "
-             "Post = contact date -> now (not contacted: 8 Sep -> now) · leads aged 48h"
-             % (n_all, "{:,}".format(a_all))] + [""] * 9,
-            top,
-            ["", "", "CSPs", "Metric", "Pre", "Post", "CSPs", "Metric", "Pre", "Post"]]
-    colour = []                                         # (0-based row, 0-based col, pre, post)
-    for k, contacted in enumerate((True, False)):
-        n_, a_ = cnt(group(want_contacted=contacted))
-        lab = "Yes" if contacted else "No"
-        lab_txt = "%s\n%d CSPs\n(active base %s)" % (lab, n_, "{:,}".format(a_))
-        rich.append((start - 1 + 4 + 3 * k, 1, lab_txt, len(lab)))
-        rows = [[lab_txt, ""] + [""] * 8 for _ in range(3)]
-        rows[1][0] = rows[2][0] = ""
+    def block(view):
+        ids = [c for c in ids_all
+               if view == "Both" or (member[c][1] == "KF") == (view == "Winback")]
+        box = {}
+        for c in ids:
+            box.setdefault((bool(trk[c]["date"]), trk[c]["soft"].upper().startswith("Y")), []).append(c)
+        grp = lambda ct=None, sf=None: [c for (a, b), cs in box.items() for c in cs
+                                         if (ct is None or a == ct) and (sf is None or b == sf)]
+        ab = lambda cs: sum(active.get(c, 0) for c in cs)
+        top = ["Contacted  (visited / called)", ""] + [""] * 8
         for j, soft in enumerate((True, False)):
-            cs = box.get((contacted, soft), [])
-            c0 = 2 + 4 * j
-            n_, a_ = cnt(cs)
-            rows[0][c0] = "%d\n(active base %s)" % (n_, "{:,}".format(a_))
-            rich.append((start - 1 + 4 + 3 * k, 1 + c0, rows[0][c0], len(str(n_))))
-            for m, (lab, a, b_) in enumerate(funnel(cs)):
-                rows[m][c0 + 1:c0 + 4] = [lab, a, b_]
-                colour.append((start - 1 + 4 + 3 * k + m, 1 + c0 + 3, a, b_))
-        vals += rows
+            g = grp(sf=soft)
+            top[2 + 4 * j] = "Soft winback: %s\n%d CSPs  (active base %s)" % (
+                "Yes" if soft else "No", len(g), fmt_n(ab(g)))
+        vals = [[T4_TITLE] + [""] * 9,
+                ["View: %s  ·  %d CSPs (active base %s) · Contacted = date of calling / visit filled · "
+                 "Pre = 1-7 Sep · Post = contact date -> now (not contacted: 8 Sep -> now) · leads aged 48h"
+                 % (view, len(ids), fmt_n(ab(ids)))] + [""] * 9,
+                top,
+                ["", "", "CSPs", "Metric", "Pre", "Post", "CSPs", "Metric", "Pre", "Post"]]
+        lines = ["%-8s %3d CSPs" % (view, len(ids))]
+        for contacted in (True, False):
+            g = grp(ct=contacted)
+            rows = [["Yes" if contacted else "No", ""] + [""] * 8,
+                    ["%d CSPs\n(active base %s)" % (len(g), fmt_n(ab(g))), ""] + [""] * 8,
+                    [""] * 10]
+            for j, soft in enumerate((True, False)):
+                cs = box.get((contacted, soft), [])
+                c0 = 2 + 4 * j
+                rows[0][c0] = len(cs)
+                rows[1][c0] = "(active base %s)" % fmt_n(ab(cs))
+                f = funnel(cs)
+                for m, (lab, a, b_) in enumerate(f):
+                    rows[m][c0 + 1:c0 + 4] = [lab, a, b_]
+                if view == "Both":
+                    lines.append("   contacted %-3s soft %-3s %4d CSPs (active %6d)  %s" % (
+                        "Yes" if contacted else "No", "Yes" if soft else "No", len(cs), ab(cs),
+                        "  ".join("%s %s->%s" % (x[0], *(("%d%%" % round(100 * v)) if v != "-" else v
+                                                            for v in x[1:])) for x in f)))
+            vals += rows
+        return vals, lines
 
+    blocks, lines = [], []
+    for v in T4_VIEWS:
+        b, ln = block(v)
+        blocks.append(b)
+        lines += ln if v == "Both" else [ln[0]]
+
+    # ---- helper tab: one block per view, T4_STEP rows apart ------------------------------------
+    try:
+        hws = sh.worksheet(T4_HELPER)
+    except gspread.WorksheetNotFound:
+        hws = sh.add_worksheet(T4_HELPER, rows=T4_STEP * len(T4_VIEWS) + 5, cols=12)
+        sh.batch_update({"requests": [{"updateSheetProperties": {
+            "properties": {"sheetId": hws.id, "hidden": True}, "fields": "hidden"}}]})
+    hws.batch_clear(["A1:L%d" % (T4_STEP * len(T4_VIEWS) + 5)])
+    hdata = []
+    for k, (v, b) in enumerate(zip(T4_VIEWS, blocks)):
+        hdata.append({"range": "A%d" % (1 + T4_STEP * k), "values": [[v]]})
+        hdata.append({"range": "B%d" % (1 + T4_STEP * k), "values": b})
+    hws.batch_update(hdata, value_input_option="RAW")
+
+    # ---- visible table: formulas that pick the view named in the dropdown -----------------------
     sid = ws.id
     r0 = start - 1
+    sel = "$A$%d" % (start + 1)
     if ws.row_count < r0 + T4_ROWS + 6:
         ws.resize(rows=r0 + T4_ROWS + 6)
     whole = {"sheetId": sid, "startRowIndex": r0, "endRowIndex": r0 + T4_ROWS,
@@ -312,19 +342,51 @@ def contact_table(sh, ws, start, member, trk, post):
     none = {"style": "NONE"}
     sh.batch_update({"requests": [
         {"unmergeCells": {"range": whole}},
-        {"updateCells": {"range": whole, "fields": "userEnteredValue,userEnteredFormat"}},
+        {"updateCells": {"range": whole, "fields": "userEnteredValue,userEnteredFormat,textFormatRuns"}},
         {"updateBorders": {"range": whole, "top": none, "bottom": none, "left": none,
                            "right": none, "innerHorizontal": none, "innerVertical": none}},
     ]})
-    ws.update(values=vals, range_name="B%d" % start, value_input_option="RAW")
+    pick = 'IFERROR(MATCH(%s,{%s},0),1)' % (sel, ",".join('"%s"' % v for v in T4_VIEWS))
+    vis = []
+    for i in range(T4_ROWS):
+        row = []
+        for j in range(10):
+            if blocks[0][i][j] == "" and all(b[i][j] == "" for b in blocks):
+                row.append("")
+                continue
+            col = gspread.utils.rowcol_to_a1(1, 2 + j).rstrip("1")
+            refs = ",".join("'%s'!%s%d" % (T4_HELPER, col, 1 + T4_STEP * k + i) for k in range(len(T4_VIEWS)))
+            row.append("=CHOOSE(%s,%s)" % (pick, refs))
+        vis.append(row)
+    ws.update(values=vis, range_name="B%d" % start, value_input_option="USER_ENTERED")
+
+    # dropdown + its label, kept if the reader already picked a view
+    a_cells = ws.get_values("A%d:A%d" % (start, start + 1))
+    a_lab = (a_cells[0][0] if a_cells and a_cells[0] else "").strip()
+    a_sel = (a_cells[1][0] if len(a_cells) > 1 and a_cells[1] else "").strip()
+    first = []
+    if not a_lab:
+        first.append({"range": "A%d" % start, "values": [["View  ▼"]]})
+    if a_sel not in T4_VIEWS:
+        first.append({"range": "A%d" % (start + 1), "values": [["Both"]]})
+    if first:
+        ws.batch_update(first, value_input_option="RAW")
 
     def rng(ra, rb, ca, cb):
         return {"sheetId": sid, "startRowIndex": ra, "endRowIndex": rb,
                 "startColumnIndex": ca, "endColumnIndex": cb}
     solid, medium = {"style": "SOLID"}, {"style": "SOLID_MEDIUM"}
     grey = {"red": 0.93, "green": 0.93, "blue": 0.93}
+    small = {"red": 0.35, "green": 0.35, "blue": 0.35}
     body0 = r0 + 2                                     # first header row
     reqs = [
+        {"setDataValidation": {"range": rng(r0 + 1, r0 + 2, 0, 1), "rule": {
+            "condition": {"type": "ONE_OF_LIST", "values": [{"userEnteredValue": v} for v in T4_VIEWS]},
+            "strict": True, "showCustomUi": True}}},
+        {"repeatCell": {"range": rng(r0, r0 + 2, 0, 1), "cell": {"userEnteredFormat": {
+            "textFormat": {"bold": True}, "horizontalAlignment": "CENTER",
+            "backgroundColor": {"red": 1, "green": 0.95, "blue": 0.8}}},
+            "fields": "userEnteredFormat(textFormat.bold,horizontalAlignment,backgroundColor)"}},
         {"repeatCell": {"range": rng(r0, r0 + 1, 1, 11),
                         "cell": {"userEnteredFormat": {"textFormat": {"bold": True}}},
                         "fields": "userEnteredFormat.textFormat.bold"}},
@@ -340,61 +402,76 @@ def contact_table(sh, ws, start, member, trk, post):
                                   "verticalAlignment,wrapStrategy)"}},
         {"repeatCell": {"range": rng(body0 + 2, body0 + 8, 1, 11),
                         "cell": {"userEnteredFormat": {"horizontalAlignment": "CENTER",
-                                                       "verticalAlignment": "MIDDLE"}},
-                        "fields": "userEnteredFormat(horizontalAlignment,verticalAlignment)"}},
+                                                       "verticalAlignment": "MIDDLE", "wrapStrategy": "WRAP"}},
+                        "fields": "userEnteredFormat(horizontalAlignment,verticalAlignment,wrapStrategy)"}},
         {"repeatCell": {"range": rng(body0 + 2, body0 + 8, 1, 3),
-                        "cell": {"userEnteredFormat": {"textFormat": {"bold": True}, "backgroundColor": grey}},
-                        "fields": "userEnteredFormat(textFormat.bold,backgroundColor)"}},
+                        "cell": {"userEnteredFormat": {"backgroundColor": grey}},
+                        "fields": "userEnteredFormat.backgroundColor"}},
         {"updateBorders": {"range": rng(body0, body0 + 8, 1, 11), "top": medium, "bottom": medium,
                            "left": medium, "right": medium, "innerHorizontal": solid,
                            "innerVertical": solid}},
     ]
+    for ca in (5, 9):                                  # Pre / Post as percentages
+        reqs.append({"repeatCell": {"range": rng(body0 + 2, body0 + 8, ca, ca + 2), "cell": {
+            "userEnteredFormat": {"numberFormat": {"type": "PERCENT", "pattern": "0%"}}},
+            "fields": "userEnteredFormat.numberFormat"}})
     merges = [rng(body0, body0 + 2, 1, 3),             # corner label
               rng(body0, body0 + 1, 3, 7), rng(body0, body0 + 1, 7, 11)]
     for k in range(2):
         ra = body0 + 2 + 3 * k
-        merges += [rng(ra, ra + 3, 1, 3), rng(ra, ra + 3, 3, 4), rng(ra, ra + 3, 7, 8)]
+        merges += [rng(ra, ra + 1, 1, 3), rng(ra + 1, ra + 3, 1, 3),      # Yes/No, its counts
+                   rng(ra + 1, ra + 3, 3, 4), rng(ra + 1, ra + 3, 7, 8)]  # active base under counts
+        reqs += [
+            {"repeatCell": {"range": rng(ra, ra + 1, 1, 3), "cell": {"userEnteredFormat": {
+                "textFormat": {"bold": True, "fontSize": 11}, "verticalAlignment": "BOTTOM"}},
+                "fields": "userEnteredFormat(textFormat,verticalAlignment)"}},
+            {"repeatCell": {"range": rng(ra + 1, ra + 3, 1, 3), "cell": {"userEnteredFormat": {
+                "textFormat": {"fontSize": 9, "foregroundColor": small}, "verticalAlignment": "TOP"}},
+                "fields": "userEnteredFormat(textFormat,verticalAlignment)"}},
+        ]
+        for ca in (3, 7):
+            reqs += [
+                {"repeatCell": {"range": rng(ra, ra + 1, ca, ca + 1), "cell": {"userEnteredFormat": {
+                    "textFormat": {"bold": True, "fontSize": 12}, "verticalAlignment": "BOTTOM",
+                    "numberFormat": {"type": "NUMBER", "pattern": "#,##0"}}},
+                    "fields": "userEnteredFormat(textFormat,verticalAlignment,numberFormat)"}},
+                {"repeatCell": {"range": rng(ra + 1, ra + 3, ca, ca + 1), "cell": {"userEnteredFormat": {
+                    "textFormat": {"fontSize": 9, "foregroundColor": small}, "verticalAlignment": "TOP"}},
+                    "fields": "userEnteredFormat(textFormat,verticalAlignment)"}},
+            ]
         for ca in (1, 3, 7):                           # medium outline round each box
             cb = 3 if ca == 1 else ca + 4
             reqs.append({"updateBorders": {"range": rng(ra, ra + 3, ca, cb), "top": medium,
                                            "bottom": medium, "left": medium, "right": medium}})
+        for ca, cb in ((1, 3), (3, 4), (7, 8)):        # count and its active base read as one cell
+            reqs.append({"updateBorders": {"range": rng(ra, ra + 3, ca, cb), "innerHorizontal": none}})
     for ca in (3, 7):
         reqs.append({"updateBorders": {"range": rng(body0, body0 + 8, ca, ca + 4),
                                        "left": medium, "right": medium}})
     for m in merges:
         reqs.append({"mergeCells": {"range": m, "mergeType": "MERGE_ALL"}})
-    for m in merges[3:]:                               # box CSP counts stand out
-        if m["startColumnIndex"] in (3, 7):
-            reqs.append({"repeatCell": {"range": m, "cell": {"userEnteredFormat": {
-                "textFormat": {"bold": True, "fontSize": 12}}},
-                "fields": "userEnteredFormat.textFormat(bold,fontSize)"}})
-    for rr, cc, txt, nb in rich:                       # first line bold, the rest plain + small
-        reqs.append({"updateCells": {
-            "range": rng(rr, rr + 1, cc, cc + 1),
-            "rows": [{"values": [{"userEnteredValue": {"stringValue": txt},
-                                  "textFormatRuns": [{"startIndex": 0, "format": {"bold": True}},
-                                                     {"startIndex": nb, "format": {"bold": False,
-                                                                                    "fontSize": 9}}]}]}],
-            "fields": "userEnteredValue,textFormatRuns"}})
-    for rr, cc, a, b_ in colour:
-        if a == "-" or b_ == "-" or a == b_:
-            continue
-        up = float(b_.rstrip("%")) > float(a.rstrip("%"))
-        reqs.append({"repeatCell": {"range": rng(rr, rr + 1, cc, cc + 1),
-                                    "cell": {"userEnteredFormat": {"backgroundColor": GREEN if up else RED}},
-                                    "fields": "userEnteredFormat.backgroundColor"}})
+
+    # post vs pre colours follow the chosen view -> conditional formats, added once
+    md = sh.fetch_sheet_metadata({"fields": "sheets(properties(sheetId),conditionalFormats)"})
+    have = str([s.get("conditionalFormats", []) for s in md["sheets"] if s["properties"]["sheetId"] == sid])
+    b_top = body0 + 2
+    for pre_c, post_c in (("F", "G"), ("J", "K")):
+        ci = ord(post_c) - ord("A")
+        for op, colr in ((">", GREEN), ("<", RED)):
+            f = "=AND(ISNUMBER(%s%d),ISNUMBER(%s%d),%s%d%s%s%d)" % (
+                pre_c, b_top + 1, post_c, b_top + 1, post_c, b_top + 1, op, pre_c, b_top + 1)
+            if f in have:
+                continue
+            reqs.append({"addConditionalFormatRule": {"index": 0, "rule": {
+                "ranges": [rng(b_top, b_top + 6, ci, ci + 1)],
+                "booleanRule": {"condition": {"type": "CUSTOM_FORMULA", "values": [{"userEnteredValue": f}]},
+                                "format": {"backgroundColor": colr}}}}})
     sh.batch_update({"requests": reqs})
 
-    dated = [trk[c]["date"] for c in ids if trk[c]["date"]]
-    lines = ["Table 4 at row %d: %d CSPs, active base %d (earliest contact %s)"
-             % (start, n_all, a_all, min(dated) if dated else "-")]
-    for contacted in (True, False):
-        for soft in (True, False):
-            cs = box.get((contacted, soft), [])
-            lines.append("   contacted %-3s soft %-3s %4d CSPs (active %6d)  %s" % (
-                "Yes" if contacted else "No", "Yes" if soft else "No", len(cs), cnt(cs)[1],
-                "  ".join("%s %s->%s" % f for f in funnel(cs))))
-    return "\n".join(lines)
+    dated = [trk[c]["date"] for c in ids_all if trk[c]["date"]]
+    head = "Table 4 at row %d (views %s, dropdown A%d = %r; earliest contact %s)" % (
+        start, "/".join(T4_VIEWS), start + 1, a_sel or "Both", min(dated) if dated else "-")
+    return "\n".join([head] + ["   " + x if not x.startswith("   ") else x for x in lines])
 
 
 def name(pair):
@@ -727,7 +804,7 @@ def main():
         print("  WARNING: Table 4 skipped -- no room for %d rows between Table 1 (ends r%d) and Table 2 "
               "(header r%d); insert rows above Table 2" % (T4_ROWS, t1_total, t2_hdr - 1))
     else:
-        print("  " + contact_table(sh, ws, t4, member, trk, post))
+        print("  " + contact_table(gc, sh, ws, t4, member, trk, post))
     print("  Table 1  formula-driven, not written. cross-check vs script: %s"
           % ("all rows match" if not mismatch else "%d MISMATCH row(s)" % len(mismatch)))
     for b, got, want in mismatch:
