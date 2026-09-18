@@ -36,7 +36,8 @@ import datetime as dt
 
 import gspread
 
-from winback_common import SHEET_ID, PRE_START, PRE_END, CONN, AGED, AGING_HOURS, mb, gclient, stamp as sync_stamp
+from winback_common import (SHEET_ID, PRE_START, PRE_END, CONN, AGED, AGING_HOURS, mb, gclient,
+                            tracker_cols, stamp as sync_stamp)
 
 SRC_GID = 0
 OUT_TAB = "Pre/Post Winback"
@@ -223,19 +224,23 @@ def main():
     sh = gc.open_by_key(SHEET_ID)
     src = sh.get_worksheet_by_id(SRC_GID)
 
+    C = tracker_cols(src, {"csp": "CSP ID", "name": "CSP Name", "date": "Date of calling / visit",
+                           "recov": "Unique Recoverable", "soft": "Soft Winback (Y/N)"})
     rows, others = [], {}
-    for r in src.get_values("B4:AB2000"):
+    for r in src.get_values("B4:BZ2000"):
         def g(k):
-            return r[k].strip() if len(r) > k else ""
-        if not g(0):
+            i = C[k]
+            return r[i].strip() if len(r) > i else ""
+        if not g("csp"):
             continue
-        if not g(8).upper().startswith("Y"):
+        if not g("soft").upper().startswith("Y"):
             # NOT soft winback (user, 16-Sep): same pre/post, post from the call date, or from the
             # campaign start (8 Sep) if he was never called
-            others.setdefault(g(0), dict(csp=g(0), called=parse_ddmm(g(2)) or CAMPAIGN_START))
+            others.setdefault(g("csp"), dict(csp=g("csp"),
+                                             called=parse_ddmm(g("date")) or CAMPAIGN_START))
             continue
-        rows.append(dict(csp=g(0), name=g(1), date_raw=g(2), recoverable=g(5),
-                         soft=g(8), hard=g(26), called=parse_ddmm(g(2))))
+        rows.append(dict(csp=g("csp"), name=g("name"), date_raw=g("date"), recoverable=g("recov"),
+                         soft=g("soft"), called=parse_ddmm(g("date"))))
     for r in rows:                      # a CSP soft in one row and not in another counts as soft
         others.pop(r["csp"], None)
     others = list(others.values())

@@ -40,7 +40,8 @@ import datetime as dt
 
 import gspread
 
-from winback_common import SHEET_ID, PRE_START, PRE_END, CONN, AGED, mb, gclient, stamp
+from winback_common import (SHEET_ID, PRE_START, PRE_END, CONN, AGED, mb, gclient, stamp,
+                            tracker_cols)
 
 SRC_GID = 0
 # Backups sit next to the script locally. In GitHub Actions the runner is discarded, so the
@@ -131,33 +132,36 @@ def main():
     expect = ["Pre Lead count", "Pre", "Post Lead count", "Post",
               "Pre Tech assigned count", "Pre", "Post Tech assigned count", "Post"]
     starts = [i for i in range(len(row3)) if row3[i:i + 8] == expect]
-    if len(starts) != 1 or row3[1] != "CSP ID" or row3[3] != "Date of calling / visit" \
-            or row3[9] != "Soft Winback (Y/N)":
-        print("ABORT: header row 3 is %r -- Pre/Post block not found exactly once, or B/D/J moved."
-              % row3)
+    # CSP ID / date / soft winback are resolved by header below (tracker_cols), so only the
+    # Pre/Post block itself has to be unambiguous here.
+    if len(starts) != 1:
+        print("ABORT: header row 3 is %r -- Pre/Post block not found exactly once." % row3)
         return 1
     col_t = starts[0] + 1                                  # 1-based first column of the block
     col_w, col_aa = col_t + 3, col_t + 7                   # the two coloured % columns
     first_l = gspread.utils.rowcol_to_a1(1, col_t).rstrip("1")
     last_l = gspread.utils.rowcol_to_a1(1, col_t + 7).rstrip("1")
 
-    grid = ws.get_values("B4:AB2000")
+    C = tracker_cols(ws, {"csp": "CSP ID", "date": "Date of calling / visit",
+                          "soft": "Soft Winback (Y/N)"})
+    grid = ws.get_values("B4:BZ2000")
     n = len(grid)
 
-    def g(r, i):
+    def g(r, key):
+        i = C[key]
         return r[i].strip() if len(r) > i else ""
 
     targets, soft_idx, all_csps = [], [], set()
     for idx, r in enumerate(grid):
-        csp = g(r, 0)
+        csp = g(r, "csp")
         if not csp:
             continue
-        if g(r, 8).upper().startswith("Y"):
+        if g(r, "soft").upper().startswith("Y"):
             # soft winback -> Pre/Post lives on its own tab now, clear it from here
             soft_idx.append(idx)
             continue
         targets.append(dict(idx=idx, row=idx + FIRST_DATA_ROW, csp=csp,
-                            called=parse_ddmm(g(r, 2))))
+                            called=parse_ddmm(g(r, "date"))))
         all_csps.add(csp)
 
     if not targets:
@@ -241,8 +245,24 @@ def main():
     print("main tab: %d non-soft rows rebuilt (%d changed), %d dated, %d cells coloured; "
           "%d soft-winback rows CLEARED (T:AA). backup -> %s"
           % (len(targets), changed, dated, len(colours), len(soft_idx), bpath))
-    stamp(ws, "auto-filled here: visit dates of Exit / Visiting rows (Willing to Exit sheet) and "
-              "the Pre / Post columns")
+    # 'Active base' column (user, 18-Sep): live active connections for EVERY tracker CSP, not just
+    # the non-soft rows this script rebuilds. Header-resolved; skipped if the column is removed.
+    try:
+        ca = tracker_cols(ws, {"active": "Active base"})["active"]
+    except RuntimeError as e:
+        print("  Active base: %s" % e)
+    else:
+        from winback_prepost import fetch_active
+        ids = [g(r, "csp") for r in grid]
+        act = fetch_active({c for c in ids if c})
+        letter = gspread.utils.rowcol_to_a1(1, 2 + ca).rstrip("1")
+        want = [[act.get(c, "") if c else ""] for c in ids]
+        ws.update(values=want, range_name="%s4:%s%d" % (letter, letter, 3 + len(ids)),
+                  value_input_option="RAW")
+        print("  Active base: %d CSPs refreshed in column %s" % (sum(1 for c in ids if c), letter))
+
+    stamp(ws, "auto-filled here: Active base, visit dates of Exit / Visiting rows (Willing to Exit "
+              "sheet) and the Pre / Post columns")
     return 0
 
 

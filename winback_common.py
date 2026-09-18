@@ -129,3 +129,22 @@ def stamp(ws, what="", cell="B1"):
     ws.format(cell, {"textFormat": {"italic": True, "bold": False, "fontSize": 9,
                                     "foregroundColor": {"red": 0.2, "green": 0.45, "blue": 0.2}},
                      "wrapStrategy": "OVERFLOW_CELL", "horizontalAlignment": "LEFT"})
+
+
+TRACKER_HDR_ROW = 3          # 'Kushagra/Fahad Winback' header row; data starts on row 4
+
+
+def tracker_cols(ws, labels, base_col="B"):
+    """{key: index into a grid read from `base_col`} for the tracker's header row.
+    Columns move (14-Sep 'M1 offered' went in at L; 18-Sep 'Active base' at D), so every reader
+    resolves them by header name instead of counting columns."""
+    row = [c.strip() for c in ws.get_values("A%d:BZ%d" % (TRACKER_HDR_ROW, TRACKER_HDR_ROW))[0]]
+    off = ord(base_col.upper()) - ord("A")
+    out = {}
+    for key, label in labels.items():
+        hits = [i for i, c in enumerate(row) if c == label]
+        if len(hits) != 1:
+            raise RuntimeError("tracker header %r found %d times in row %d -- %r"
+                               % (label, len(hits), TRACKER_HDR_ROW, row))
+        out[key] = hits[0] - off
+    return out

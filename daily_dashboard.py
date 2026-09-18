@@ -61,6 +61,11 @@ TABLE 4  contacted x soft winback, 2x2 (user, 16-Sep) -- between Table 1 and Tab
   (Winback = KF, Visiting = Field, the Table 1 split). All three views are written to the hidden
   tab 'Daily Dashboard data'; the visible cells are CHOOSE formulas on the dropdown, and the
   post-vs-pre colours are conditional formats, so switching views needs no refresh.
+
+CONTROL BLOCK (user, 18-Sep) -- directly under Table 4, same pre/post funnel for the CSPs this
+  sheet does NOT work: SUPPLY_MODEL zone contains DELHI, active connections > 0 on the latest
+  Quality OS snapshot, and no tracker row / not on the Non_compliant list. Pooled, three
+  aggregate queries; it never lists the CSPs.
   Pre  = 2026-09-01 .. 2026-09-07 (first week of September -- NOT Table 2's August week)
   Post = contact date -> now; a CSP never contacted has no contact date, so his post starts on
          8 Sep (campaign start, the day after the pre week). Leads aged 48h, as in Table 2.
@@ -72,7 +77,7 @@ import datetime as dt
 import gspread
 
 from winback_common import (SHEET_ID, PRE_START, PRE_END, CONN, AGED, mb, gclient,
-                            load_noncompliant, stamp)
+                            load_noncompliant, stamp, tracker_cols)
 
 OUT_GID = 1292308429
 BULK_DATE = dt.date(2026, 9, 8)                 # Non_compliant: done in one go, first date
@@ -478,6 +483,116 @@ def contact_table(gc, sh, ws, start, member, trk, post):
     return "\n".join([head] + ["   " + x if not x.startswith("   ") else x for x in lines])
 
 
+CT_TITLE = "Not on this sheet  ·  Delhi  ·  active   (control group)"
+CT_ROWS = 6                                             # title, note, header, B2A / A2I / B2I
+CT_ZONE = "%DELHI%"
+
+
+def control_table(sh, ws, start, on_sheet):
+    """CSPs the sheet does NOT work: zone contains DELHI and active connections > 0.
+    Same pre/post funnel as Table 4, pooled, so the worked cohort can be read against a
+    comparable group. Three aggregate queries -- the per-CSP list is never needed."""
+    skip = "','".join(sorted(on_sheet))
+    ctrl = """
+      WITH z AS (SELECT CSP_ID, MAX(UPPER(ZONE)) AS zone FROM PROD_DB.PUBLIC.SUPPLY_MODEL GROUP BY 1),
+           a AS (SELECT CSP_ID, ACTIVE_CONNECTION_COUNT AS ac
+                 FROM PROD_DB.CSP_QUALITY_SERVICE_CSP_QUALITY_SERVICE.DAILY_METRIC_SNAPSHOTS
+                 WHERE _FIVETRAN_ACTIVE AND SNAPSHOT_DATE = (
+                   SELECT MAX(SNAPSHOT_DATE)
+                   FROM PROD_DB.CSP_QUALITY_SERVICE_CSP_QUALITY_SERVICE.DAILY_METRIC_SNAPSHOTS
+                   WHERE _FIVETRAN_ACTIVE)),
+           ctrl AS (SELECT z.CSP_ID, a.ac FROM z JOIN a USING (CSP_ID)
+                    WHERE z.zone LIKE '%s' AND a.ac > 0 AND z.CSP_ID NOT IN ('%s'))
+    """ % (CT_ZONE, skip)
+    n, base = mb(ctrl + "SELECT COUNT(*), SUM(ac) FROM ctrl")[0]
+    n, base = int(n or 0), int(base or 0)
+
+    def funnel(where):
+        sql = ctrl + """,
+          conn AS (%s
+            JOIN ctrl ON ctrl.CSP_ID = f.CSP_ID
+            WHERE f.ETL_CURRENT AND %s
+            GROUP BY 1, 2 %s)
+          SELECT COUNT(*), SUM(assigned), SUM(installed) FROM conn""" % (CONN, where, AGED)
+        r = mb(sql)[0]
+        return int(r[0] or 0), int(r[1] or 0), int(r[2] or 0)
+
+    pl, pa, pi = funnel("TO_DATE(CONVERT_TIMEZONE('Asia/Kolkata', f.CREATED_AT)) BETWEEN '%s' AND '%s'"
+                        % T4_PRE)
+    ql, qa, qi = funnel("TO_DATE(CONVERT_TIMEZONE('Asia/Kolkata', f.CREATED_AT)) >= '%s'"
+                        % BULK_DATE.isoformat())
+    mets = [("B2A", pct(pa, pl), pct(qa, ql)), ("A2I", pct(pi, pa), pct(qi, qa)),
+            ("B2I", pct(pi, pl), pct(qi, ql))]
+
+    vals = [[CT_TITLE] + [""] * 9,
+            ["%d CSPs (active base %s) · zone contains DELHI · active connections > 0 · not on this "
+             "sheet (no tracker row, not on the Non_compliant list) · Pre = 1-7 Sep · Post = 8 Sep -> "
+             "now · leads aged 48h · %s pre leads, %s post leads"
+             % (n, "{:,}".format(base), "{:,}".format(pl), "{:,}".format(ql))] + [""] * 9,
+            ["", "", "CSPs", "Metric", "Pre", "Post"] + [""] * 4]
+    for k, (lab, a, b) in enumerate(mets):
+        vals.append(["Everyone else in Delhi" if k == 0 else "", "",
+                     n if k == 0 else "", lab, a, b] + [""] * 4)
+
+    sid = ws.id
+    r0 = start - 1
+    whole = {"sheetId": sid, "startRowIndex": r0, "endRowIndex": r0 + CT_ROWS,
+             "startColumnIndex": 1, "endColumnIndex": 11}
+    none = {"style": "NONE"}
+    sh.batch_update({"requests": [
+        {"unmergeCells": {"range": whole}},
+        {"updateCells": {"range": whole, "fields": "userEnteredValue,userEnteredFormat,textFormatRuns"}},
+        {"updateBorders": {"range": whole, "top": none, "bottom": none, "left": none, "right": none,
+                           "innerHorizontal": none, "innerVertical": none}},
+    ]})
+    ws.update(values=vals, range_name="B%d" % start, value_input_option="RAW")
+
+    def rng(ra, rb, ca, cb):
+        return {"sheetId": sid, "startRowIndex": ra, "endRowIndex": rb,
+                "startColumnIndex": ca, "endColumnIndex": cb}
+    solid, medium = {"style": "SOLID"}, {"style": "SOLID_MEDIUM"}
+    grey = {"red": 0.93, "green": 0.93, "blue": 0.93}
+    h = r0 + 2                                          # header row of the small box
+    reqs = [
+        {"repeatCell": {"range": rng(r0, r0 + 1, 1, 11),
+                        "cell": {"userEnteredFormat": {"textFormat": {"bold": True}}},
+                        "fields": "userEnteredFormat.textFormat.bold"}},
+        {"repeatCell": {"range": rng(r0 + 1, r0 + 2, 1, 11),
+                        "cell": {"userEnteredFormat": {"textFormat": {"italic": True, "fontSize": 9,
+                                 "foregroundColor": {"red": 0.4, "green": 0.4, "blue": 0.4}}}},
+                        "fields": "userEnteredFormat.textFormat"}},
+        {"repeatCell": {"range": rng(h, h + 1, 1, 7),
+                        "cell": {"userEnteredFormat": {"textFormat": {"bold": True}, "backgroundColor": grey,
+                                                       "horizontalAlignment": "CENTER"}},
+                        "fields": "userEnteredFormat(textFormat.bold,backgroundColor,horizontalAlignment)"}},
+        {"repeatCell": {"range": rng(h + 1, h + 4, 1, 7),
+                        "cell": {"userEnteredFormat": {"horizontalAlignment": "CENTER",
+                                                       "verticalAlignment": "MIDDLE"}},
+                        "fields": "userEnteredFormat(horizontalAlignment,verticalAlignment)"}},
+        {"repeatCell": {"range": rng(h + 1, h + 4, 1, 3),
+                        "cell": {"userEnteredFormat": {"textFormat": {"bold": True}, "backgroundColor": grey}},
+                        "fields": "userEnteredFormat(textFormat.bold,backgroundColor)"}},
+        {"repeatCell": {"range": rng(h + 1, h + 2, 3, 4),
+                        "cell": {"userEnteredFormat": {"textFormat": {"bold": True, "fontSize": 12}}},
+                        "fields": "userEnteredFormat.textFormat"}},
+        {"updateBorders": {"range": rng(h, h + 4, 1, 7), "top": medium, "bottom": medium,
+                           "left": medium, "right": medium, "innerHorizontal": solid,
+                           "innerVertical": solid}},
+        {"mergeCells": {"range": rng(h + 1, h + 4, 1, 3), "mergeType": "MERGE_ALL"}},
+        {"mergeCells": {"range": rng(h + 1, h + 4, 3, 4), "mergeType": "MERGE_ALL"}},
+    ]
+    for k, (lab, a, b) in enumerate(mets):             # post vs pre, same colours as Table 4
+        if a == "-" or b == "-" or a == b:
+            continue
+        up = float(b.rstrip("%")) > float(a.rstrip("%"))
+        reqs.append({"repeatCell": {"range": rng(h + 1 + k, h + 2 + k, 5, 6),
+                                    "cell": {"userEnteredFormat": {"backgroundColor": GREEN if up else RED}},
+                                    "fields": "userEnteredFormat.backgroundColor"}})
+    sh.batch_update({"requests": reqs})
+    return ("Control (Delhi, active, not on the sheet) at row %d: %d CSPs, active base %s  %s"
+            % (start, n, "{:,}".format(base), "  ".join("%s %s->%s" % m for m in mets)))
+
+
 def name(pair):
     return "%s %s" % pair
 
@@ -674,13 +789,18 @@ def main():
         return 1
 
     trk = {}
-    for r in sh.get_worksheet_by_id(0).get_values("B4:J2000"):
+    tws = sh.get_worksheet_by_id(0)
+    C = tracker_cols(tws, {"csp": "CSP ID", "date": "Date of calling / visit", "cat": "Category",
+                           "mode": "Winback and Visiting", "soft": "Soft Winback (Y/N)"})
+    for r in tws.get_values("B4:BZ2000"):
         def g(k):
-            return r[k].strip() if len(r) > k else ""
-        if g(0):
+            i = C[k]
+            return r[i].strip() if len(r) > i else ""
+        if g("csp"):
             # a CSP listed twice keeps its LOWER row: a0b5r9 is P6 at r178 and
             # 750 opt out at r197, and the reviewer counts it among the 3 opt-outs
-            trk[g(0)] = {"cat": g(3), "mode": g(4), "date": parse_ddmm(g(2)), "soft": g(8)}
+            trk[g("csp")] = {"cat": g("cat"), "mode": g("mode"), "date": parse_ddmm(g("date")),
+                             "soft": g("soft")}
 
     # --- bucket membership: tracker Category wins, then Non_compliant ------------
     # Same rule as the sheet's Table 1 formula: ANY tracker category other than
@@ -809,6 +929,16 @@ def main():
               "(header r%d); insert rows above Table 2" % (T4_ROWS, t1_total, t2_hdr - 1))
     else:
         print("  " + contact_table(gc, sh, ws, t4, member, trk, post))
+        # control group, right under the 2x2: Delhi + active CSPs this sheet does not work
+        c_start = t4 + T4_ROWS + 1
+        free = all(not v.strip() for r in ws.get_values("B%d:K%d" % (c_start, c_start + CT_ROWS - 1))
+                   for v in r)
+        titled = (ws.get_values("B%d" % c_start) or [[""]])[0][:1] == [CT_TITLE]
+        if (free or titled) and c_start + CT_ROWS - 1 <= t2_hdr - 2:
+            print("  " + control_table(sh, ws, c_start, set(trk) | nc))
+        else:
+            print("  WARNING: control table skipped -- needs %d free rows at r%d (Table 2 header r%d)"
+                  % (CT_ROWS, c_start, t2_hdr - 1))
     print("  Table 1  formula-driven, not written. cross-check vs script: %s"
           % ("all rows match" if not mismatch else "%d MISMATCH row(s)" % len(mismatch)))
     for b, got, want in mismatch:
