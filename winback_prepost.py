@@ -441,8 +441,10 @@ def main():
 
     def inst_line(ids_, base):
         won, lost, nw, nl = moved(ids_, base)
-        return ("%+d installs   (+%d by %d CSPs − %d by %d CSPs)" % (won - lost, won, nw, lost, nl),
-                won - lost)
+        # every CSP in the group is accounted for: improved + declined + flat (same count in both
+        # windows, usually zero installs in both)
+        return ("%+d installs   (+%d by %d CSPs − %d by %d CSPs · %d flat)"
+                % (won - lost, won, nw, lost, nl, len(set(ids_)) - nw - nl), won - lost)
 
     inst_kpis = []
     for base, lab in (("sep", "1 - 7 Sep"), ("aug", "25 - 31 Aug")):
