@@ -26,7 +26,10 @@ DATES
 
 SAFETY
   * Never blanks a tracker cell: an empty source value writes nothing.
-  * Only touches rows whose CSP ID is already in the tracker; never adds rows.
+  * Existing rows: only the four columns above are touched, never any other cell.
+  * Adds rows only for visit-sheet CSPs whose Category is 'Exit' and that have no tracker row
+    yet (user, 18-Sep); it never deletes or re-adds a row the reviewer removed under another
+    category (the 16-Sep P6_Fallouts / Growth Team removals stay removed).
   * Writes only the four columns above, located by header; aborts if any header is missing or
     duplicated. Formula columns (G Unique Recoverable, 'M1 offered') are never written.
   * If the visit sheet cannot be read, aborts without writing (no stale fallback).
@@ -111,6 +114,16 @@ def main():
         print("ABORT: visit sheet headers moved: %r" % rows[0])
         return 1
 
+    # name + category, for the Exit rows this script appends to the tracker (user, 18-Sep)
+    ix_name = next((i for i, h in enumerate(hdr) if h == "partner name"), None)
+    ix_cat = next((i for i, h in enumerate(hdr) if h == "category"), None)
+    sheet_exit = {}
+    for r in rows[1:]:
+        cid = r[0].strip() if r else ""
+        cat = r[ix_cat].strip() if ix_cat is not None and len(r) > ix_cat else ""
+        if re.fullmatch(r"a0[a-z0-9]{4}", cid) and cat == "Exit" and cid not in sheet_exit:
+            sheet_exit[cid] = (r[ix_name].strip() if ix_name is not None and len(r) > ix_name else "")
+
     src, skipped, pending = {}, [], []
     for r in rows[1:]:
         def g(key):
@@ -136,7 +149,7 @@ def main():
     # Resolve every column by its header in row 3 -- columns get inserted (14-Sep: 'M1 offered'
     # went in at L and pushed '750' to M; a fixed letter would have written into a formula).
     row3 = [c.strip() for c in ws.get_values("A3:BZ3")[0]]
-    need = {"csp": "CSP ID", "visit": "Date of calling / visit", "cat": "Category",
+    need = {"csp": "CSP ID", "name": "CSP Name", "visit": "Date of calling / visit", "cat": "Category",
             "mode": "Winback and Visiting", "soft": "Soft Winback (Y/N)", "ci": "CI(m1)",
             "opt750": "750"}
     pos = {}
@@ -149,7 +162,31 @@ def main():
     col_letter = {k: gspread.utils.rowcol_to_a1(1, pos[k] + 1).rstrip("1")
                   for k in ("visit", "soft", "ci", "opt750")}
 
-    rows = ws.get_values("A4:%s2000" % gspread.utils.rowcol_to_a1(1, max(pos.values()) + 1).rstrip("1"))
+    # New Exit CSPs in the visit sheet get a tracker row (user, 18-Sep: "Anoop is in willing to
+    # exit, why is it not in this tab"). Category Exit only -- the P6_Fallouts / Growth Team rows
+    # the reviewer deleted on 16-Sep stay deleted. Appends only; never edits or removes a row.
+    last_col = gspread.utils.rowcol_to_a1(1, max(pos.values()) + 1).rstrip("1")
+    rows = ws.get_values("A4:%s2000" % last_col)
+    have = {r[pos["csp"]].strip() for r in rows if len(r) > pos["csp"] and r[pos["csp"]].strip()}
+    fresh = [c for c in sheet_exit if c not in have]
+    if fresh and not os.environ.get("DRY_RUN"):
+        col = lambda i: gspread.utils.rowcol_to_a1(1, i + 1).rstrip("1")
+        start = FIRST_DATA_ROW + max((i for i, r in enumerate(rows)
+                                      if len(r) > pos["csp"] and r[pos["csp"]].strip()), default=-1) + 1
+        lo, hi = min(pos.values()), max(pos.values())
+        blk = ws.get_values("%s%d:%s%d" % (col(lo), start, col(hi), start + len(fresh) - 1))
+        if any(v.strip() for r in blk for v in r):
+            print("   tracker rows %d+ are not empty -- %d Exit CSPs not added" % (start, len(fresh)))
+        else:
+            ws.batch_update([{"range": "%s%d" % (col(pos[k]), start + n_), "values": [[v]]}
+                             for n_, c in enumerate(fresh)
+                             for k, v in (("csp", c), ("cat", "Exit"), ("mode", "Visiting"))]
+                            + [{"range": "%s%d" % (col(pos["name"]), start + n_), "values": [[sheet_exit[c]]]}
+                               for n_, c in enumerate(fresh)], value_input_option="RAW")
+            print("   added %d Exit CSPs to the tracker at row %d: %s" % (len(fresh), start, fresh))
+            rows = ws.get_values("A4:%s2000" % last_col)
+    elif fresh:
+        print("   DRY: %d Exit CSPs would be added to the tracker: %s" % (len(fresh), fresh))
     n = len(rows)
 
     def g(r, key):
