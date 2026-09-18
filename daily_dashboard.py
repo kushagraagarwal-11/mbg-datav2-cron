@@ -16,8 +16,7 @@ BUCKETS  (tracker = 'Kushagra/Fahad Winback' tab)
   Non_compliant-> the 'Non_compliant list' tab minus CSPs any tracker category already owns,
                   all on BULK_DATE (8 Sep).
   PRECEDENCE: the tracker Category wins, then Non_compliant. No CSP is counted twice.
-  Categories 'Previous Good installers', 'Non-compliant blocked' and 'Delivery receipt pending'
-  do NOT own a CSP: a
+  Categories 'Previous Good installers' and 'Non-compliant blocked' do NOT own a CSP: a
   Non_compliant-list CSP under them stays in the Non_compliant row (same rule in the sheet formulas).
   'Wrong enforcement' was 'Ghost Install' until 14-Sep; the old name is still accepted.
 
@@ -82,6 +81,7 @@ NC = ("Non_compliant", "-")
 ORDER = [("89 Winback", "KF"), ("89 Winback", "Field"), ("Exit", "Field"), NC,
          ("P6_Fallouts", "KF"), ("P6_Fallouts", "Field"), ("750 Opt out", "Field"),
          ("Growth Team", "KF"), ("Growth Team", "Field"), ("Wrong enforcement", "KF"),
+         ("Delivery receipt pending", "KF"),
          ("P1", "KF"), ("P1", "Field"), ("P2", "KF"), ("P2", "Field")]
 CAT2BUCKET = {"Winback _ 89 CSPs": "89 Winback",
               "": "89 Winback",                # undated-category rows in the 89 block
@@ -94,11 +94,13 @@ CAT2BUCKET = {"Winback _ 89 CSPs": "89 Winback",
               # a Non_compliant-list CSP the team works from the tracker (16-Sep: Giganet, hoarding
               # blocked) -- stays in the Non_compliant row, so it must not "own" the CSP
               "Non-compliant blocked": None,
-              # auto-added by netbox_funnel.py: courier delivered, app receipt not accepted (17-Sep)
-              "Delivery receipt pending": None}
-NOT_OWNING = {"Previous Good installers", "Non-compliant blocked", "Delivery receipt pending"}
+              # auto-added by netbox_funnel.py: courier delivered, app receipt not accepted; its own
+              # dashboard row since 18-Sep (user), so it DOES own the CSP
+              "Delivery receipt pending": "Delivery receipt pending"}
+NOT_OWNING = {"Previous Good installers", "Non-compliant blocked"}
 # buckets whose KF / Field is fixed; every other bucket is split by tracker column F
-FIXED_MODE = {"Exit": "Field", "750 Opt out": "Field", "Wrong enforcement": "KF"}
+FIXED_MODE = {"Exit": "Field", "750 Opt out": "Field", "Wrong enforcement": "KF",
+              "Delivery receipt pending": "KF"}
 T2_COLS = "D%d:I%d"
 NC_TAB = "Non_compliant list"
 GREEN = {"red": 0.80, "green": 0.92, "blue": 0.82}
@@ -136,7 +138,9 @@ def visits_table(gc, sh, ws, t2_total):
         g = lambda i: r[i].strip() if len(r) > i else ""
         if not g(i_id):
             continue
-        a = g(i_own) or "(no owner)"
+        a = g(i_own)
+        if not a:                                       # no owner on the sheet row (user, 18-Sep)
+            continue
         if a.lower() in T3_EXCLUDE:
             continue
         a = T3_MERGE.get(a.lower(), a)

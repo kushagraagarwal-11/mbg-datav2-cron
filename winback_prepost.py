@@ -51,7 +51,7 @@ WHITE = {"red": 1, "green": 1, "blue": 1}
 
 # Layout is driven off the KPI count -- adding a KPI used to silently collide with the
 # MOVEMENT heading below it.
-N_KPIS = 17
+N_KPIS = 23
 KPI_ROW0 = 5                                               # sheet row of the first KPI
 N_MOVE = 4                                                 # B2A, A2I, B2I lines + caveat
 MOVE_ROW = KPI_ROW0 + N_KPIS + 1                           # blank line, then the heading
@@ -177,6 +177,29 @@ def fetch_installs(dated_or_all, today):
         GROUP BY 1
         """ % (union, AUG_START, AUG_END, today.isoformat())):
             out[rr[0]] = (int(rr[1] or 0), int(rr[2] or 0))
+    return out
+
+
+def fetch_installs_windows(csp_ids, windows):
+    """-> {csp: {label: installs}} counted by install completion date (IST), same rule as
+    fetch_installs (all row versions; VALID_FROM for installs with no completion stamp)."""
+    out = {}
+    ids = sorted(csp_ids)
+    sums = ", ".join("SUM(IFF(d BETWEEN '%s' AND '%s', 1, 0))" % (a.isoformat(), b.isoformat())
+                     for _, a, b in windows)
+    for i in range(0, len(ids), 60):
+        for r in mb("""
+        WITH v AS (
+          SELECT CSP_ID, CONNECTION_ID,
+                 TO_DATE(CONVERT_TIMEZONE('Asia/Kolkata',
+                   COALESCE(MIN(INSTALLATION_COMPLETED_AT),
+                            MIN(IFF(OTP_VERIFIED_FLAG OR COMPLETED_STEP >= 7, VALID_FROM, NULL))))) AS d
+          FROM PROD_DB.DBT_CSP.FACT_INSTALL_CANDIDATES
+          WHERE CSP_ID IN ('%s')
+            AND (OTP_VERIFIED_FLAG OR INSTALLATION_COMPLETED_AT IS NOT NULL OR COMPLETED_STEP >= 7)
+          GROUP BY 1, 2)
+        SELECT CSP_ID, %s FROM v GROUP BY 1""" % ("','".join(ids[i:i + 60]), sums)):
+            out[r[0]] = {w[0]: int(v or 0) for w, v in zip(windows, r[1:])}
     return out
 
 
@@ -389,6 +412,42 @@ def main():
                                   "wrapStrategy,textFormat)"}},
     ]})
 
+    # INSTALLS WON / LOST (user, 18-Sep): same shape as Net winback, but counting installs
+    # instead of CSPs. Last 7 complete days vs the first week of September and vs the last week
+    # of August, per CSP: a CSP installing more adds to "won", one installing fewer adds to
+    # "lost", and the headline is the difference.
+    WIN = [("last7", today - dt.timedelta(days=7), today - dt.timedelta(days=1)),
+           ("sep", dt.date(2026, 9, 1), dt.date(2026, 9, 7)),
+           ("aug", dt.date(2026, 8, 25), dt.date(2026, 8, 31))]
+    soft_ids = [r["csp"] for r in rows]
+    other_ids = [o["csp"] for o in others]
+    wi = fetch_installs_windows(set(soft_ids) | set(other_ids), WIN)
+
+    def moved(ids_, base):
+        won = lost = nw = nl = 0
+        for c in ids_:
+            d = wi.get(c, {})
+            x = d.get("last7", 0) - d.get(base, 0)
+            if x > 0:
+                won += x; nw += 1
+            elif x < 0:
+                lost -= x; nl += 1
+        return won, lost, nw, nl
+
+    def inst_line(ids_, base):
+        won, lost, nw, nl = moved(ids_, base)
+        return ("%+d installs   (+%d by %d CSPs − %d by %d CSPs)" % (won - lost, won, nw, lost, nl),
+                won - lost)
+
+    inst_kpis = []
+    for base, lab in (("sep", "1 - 7 Sep"), ("aug", "25 - 31 Aug")):
+        v, n = inst_line(soft_ids + other_ids, base)
+        inst_kpis.append(("Installs · last 7 days (%s - %s) vs %s"
+                          % (WIN[0][1].strftime("%d"), WIN[0][2].strftime("%d %b"), lab), v, n))
+        for ids_, who in ((soft_ids, "soft winback"), (other_ids, "not soft winback")):
+            v, n = inst_line(ids_, base)
+            inst_kpis.append(("    %s" % who, v, n))
+
     kpis = [
         ("CSPs on soft winback", str(len(rows))),
         ("Called so far", str(len(dated))),
@@ -419,7 +478,7 @@ def main():
         ("Net winback",
          "%d   (%d soft − %d soft worse − %d not-soft worse, on B2I)" % (len(rows) - move["b2i"][1] - others_worse, len(rows),
                                              move["b2i"][1], others_worse)),
-    ]
+    ] + [(lab, val) for lab, val, _ in inst_kpis]
     # the pre -> post rows get the same green/red rule as the table
     # keyed by position in kpis, resolved from the labels so adding a KPI can't misalign colours
     kpi_move = {}
@@ -429,6 +488,8 @@ def main():
             kpi_move[i] = (a_s, b_s)
         elif lab == "Monthly run-rate added":
             kpi_move[i] = (str(t_aug), str(t_post))
+    for k, (_, _, net) in enumerate(inst_kpis):     # installs won/lost: green above 0, red below
+        kpi_move[len(kpis) - len(inst_kpis) + k] = ("0", str(net))
     ia, ja = ipd_col("Aug\nInstalls/day"), ipd_col("Post\nInstalls/day")
     f_runrate = ('=LET(a,%s%d*30,b,%s%d*30,TEXT(b-a,"+#,##0;-#,##0")&" installs / month   ("&'
                  'TEXT(a,"#,##0")&" → "&TEXT(b,"#,##0")&")")' % (ia, total_row, ja, total_row))
