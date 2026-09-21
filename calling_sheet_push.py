@@ -97,7 +97,8 @@ kapture_base AS (
     k.DISPOSITION_FOLDER_LEVEL_2, k.DISPOSITION_FOLDER_LEVEL_3, k.DISPOSED_FOLDER,
     k.QUESTION_BY_PARTNER, k.SUB_STATUS,
     CASE
-      WHEN k.DISPOSED_FOLDER = 'New Project' THEN 'NewProject'
+      WHEN k.DISPOSED_FOLDER = 'New Project'
+                 OR UPPER(k.DISPOSITION_FOLDER_LEVEL_3) = 'NEW PROJECT' THEN 'NewProject'
       WHEN k.SUB_STATUS = 'Resolved on Call' THEN 'L1'
       WHEN k.SUB_STATUS IN ('Completed','Resolved')
            AND (k.DISPOSED_FOLDER IS NULL OR k.DISPOSED_FOLDER != 'New Project') THEN 'L2'
@@ -108,10 +109,19 @@ kapture_base AS (
         BETWEEN DATEADD(day,-2,CURRENT_DATE()) AND DATEADD(day,-1,CURRENT_DATE())
     AND k.STATUS = 'Complete'
     AND k.TICKET_TYPE_PARENT_SUB = 'Parent Ticket'
+    -- Kapture widened this table on 19-Sep-2026: it used to hold ONLY
+    -- DISPOSITION_FOLDER_LEVEL_1='Partner' tickets; then 'Primary' (end-CUSTOMER),
+    -- 'Wiom Net', 'CSP' and 'Test folder' started landing in it too (with backfill).
+    -- Without this gate ~450 customer tickets/day flood the calling tab as
+    -- Final Bucket='Unknown'. 'CSP' is KEPT: Kapture moved most genuine partner
+    -- tickets out of the 'Partner' folder into 'CSP' on that same date.
+    AND k.DISPOSITION_FOLDER_LEVEL_1 IN ('Partner','CSP')
     AND k.SUB_STATUS NOT IN ('Customer Replied','Unattended','Replied')
     AND (k.DISPOSED_FOLDER IS NULL OR k.DISPOSED_FOLDER NOT IN
          ('Not Pick / Unreachable / Switched Off / Call by Mistake', 'Duplicate Tickets',
-          'Want partnership of wiom'))
+          'Want partnership of wiom',
+          -- post-18-Sep-2026 taxonomy names for the same two things
+          'DUPLICATE TICKET RECEIVED', 'NUMBER UNREACHABLE / CALL NOT PICKED'))
     AND (k.CUSTOMER_NAME IS NULL OR UPPER(k.CUSTOMER_NAME) != 'SANJAY_WIOM_TEST_ACCOUNT')
   QUALIFY ROW_NUMBER() OVER (PARTITION BY k.TICKET_NO ORDER BY k.INGESTED_AT DESC NULLS LAST) = 1
 ),
@@ -285,10 +295,18 @@ def push_to_sheet(cols, rows):
 # L1/L2/NewProject; the append-only push never revisits the row, so it strands
 # stale. Reconcile FLAGS these (does NOT delete — deleting would shift the team's
 # manual columns I:L out of alignment).
+# Only these DISPOSITION_FOLDER_LEVEL_1 values are real partner/CSP tickets. Kapture
+# widened the table on 19-Sep-2026 (see note in the pull SQL); anything else is an
+# end-customer / Wiom Net / test ticket and must never sit in the calling tab.
+PARTNER_FOLDERS = ("Partner", "CSP")
+
 EXCLUDED_FOLDERS = {
     "Duplicate Tickets": "REMOVED - Duplicate",
     "Not Pick / Unreachable / Switched Off / Call by Mistake": "REMOVED - Not Pick",
     "Want partnership of wiom": "REMOVED - Want partnership",  # prospective-partner enquiries, not support
+    # Same two categories under the 18-Sep-2026 Kapture taxonomy rebuild.
+    "DUPLICATE TICKET RECEIVED": "REMOVED - Duplicate",
+    "NUMBER UNREACHABLE / CALL NOT PICKED": "REMOVED - Not Pick",
 }
 
 # Current disposition of specific tickets — looked up by explicit Ticket ID (NO
@@ -297,8 +315,10 @@ EXCLUDED_FOLDERS = {
 # each batch of IDs returns at most one row per ID. {ids} = comma-separated ints.
 RECONCILE_SQL_TMPL = r"""
 SELECT k.TICKET_NO, k.DISPOSED_FOLDER AS FOLDER,
+  COALESCE(k.DISPOSITION_FOLDER_LEVEL_1,'') AS L1,
   CASE
-    WHEN k.DISPOSED_FOLDER = 'New Project' THEN 'NewProject'
+    WHEN k.DISPOSED_FOLDER = 'New Project'
+                 OR UPPER(k.DISPOSITION_FOLDER_LEVEL_3) = 'NEW PROJECT' THEN 'NewProject'
     WHEN k.SUB_STATUS = 'Resolved on Call' THEN 'L1'
     WHEN k.SUB_STATUS IN ('Completed','Resolved')
          AND (k.DISPOSED_FOLDER IS NULL OR k.DISPOSED_FOLDER != 'New Project') THEN 'L2'
@@ -319,6 +339,7 @@ def reconcile_recent(ws=None, lookback_rows=2000):
     'Not Pick') stays wrong forever otherwise.
       - bucket changed among L1 / L2 / NewProject -> rewrite G to the new bucket
       - now in an excluded folder                 -> flag G as 'REMOVED - <reason>'
+      - not a Partner/CSP folder ticket          -> flag G as 'REMOVED - Customer ticket'
       - no longer qualifying (e.g. reopened)       -> left as-is (conservative)
     Only column G is written; manual columns I:L are never touched. Row numbers
     are derived from a single fresh read taken immediately before the write, so
@@ -353,8 +374,8 @@ def reconcile_recent(ws=None, lookback_rows=2000):
     for j in range(0, len(tickets), CHUNK):
         ids = ",".join(tickets[j:j + CHUNK])
         _, krows = _run_sql(RECONCILE_SQL_TMPL.format(ids=ids))
-        for t, folder, bucket in krows:
-            kap[str(t).strip()] = (folder, bucket)
+        for t, folder, l1, bucket in krows:
+            kap[str(t).strip()] = (folder, l1, bucket)
 
     updates = []
     rebucketed = flagged = 0
@@ -365,8 +386,10 @@ def reconcile_recent(ws=None, lookback_rows=2000):
         cur = r[6].strip()
         if not tid or tid not in kap:
             continue
-        folder, newb = kap[tid]
-        if folder in EXCLUDED_FOLDERS:
+        folder, l1, newb = kap[tid]
+        if l1 not in PARTNER_FOLDERS:
+            target = "REMOVED - Customer ticket"
+        elif folder in EXCLUDED_FOLDERS:
             target = EXCLUDED_FOLDERS[folder]
         elif newb in ("L1", "L2", "NewProject"):
             target = newb
@@ -401,7 +424,8 @@ kapture AS (
          + TRY_TO_NUMBER(SPLIT_PART(k.DIFF_TIME_CREATE_AND_RESOLVE_WORKING_HOURS,':',2))
          + TRY_TO_NUMBER(SPLIT_PART(k.DIFF_TIME_CREATE_AND_RESOLVE_WORKING_HOURS,':',3))/60.0) AS tat_mins,
         CASE
-            WHEN k.DISPOSED_FOLDER = 'New Project' THEN 'NewProject'
+            WHEN k.DISPOSED_FOLDER = 'New Project'
+                 OR UPPER(k.DISPOSITION_FOLDER_LEVEL_3) = 'NEW PROJECT' THEN 'NewProject'
             WHEN k.SUB_STATUS = 'Resolved on Call' THEN 'L1'
             WHEN k.SUB_STATUS IN ('Completed','Open','Resolved')
                  AND (k.DISPOSED_FOLDER IS NULL OR k.DISPOSED_FOLDER != 'New Project') THEN 'L2'
@@ -414,6 +438,7 @@ kapture AS (
       )
       AND TRY_TO_DATE(k.CREATED_DATE,'DD/MM/YYYY') < ist.today
       AND k.TICKET_TYPE_PARENT_SUB = 'Parent Ticket'
+      AND k.DISPOSITION_FOLDER_LEVEL_1 IN ('Partner','CSP')  -- see note in SQL above
       AND k.SUB_STATUS NOT IN ('Customer Replied','Unattended','Replied')
     QUALIFY ROW_NUMBER() OVER (
       PARTITION BY k.TICKET_NO
