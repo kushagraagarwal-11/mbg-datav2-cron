@@ -21,6 +21,9 @@ BUCKETS  (tracker = 'Kushagra/Fahad Winback' tab)
   'Wrong enforcement' was 'Ghost Install' until 14-Sep; the old name is still accepted.
 
 TABLE 1  per bucket: D = total, E.. = per date      *** FORMULA-DRIVEN IN THE SHEET ***
+  The date columns extend themselves: every run adds a column per day that has passed since the
+  last header, copied from the previous column (formulas + formatting), and stretches the Total
+  column's SUM (user, 21-Sep).
   CSPs unlocked, counted on their date of calling / visit, where Soft Winback = Y.
   Non_compliant: all on BULK_DATE. The sheet computes this itself from the tracker and the
   'Non_compliant list' tab; this script never writes it and only prints a cross-check.
@@ -593,6 +596,49 @@ def control_table(sh, ws, start, on_sheet):
             % (start, n, "{:,}".format(base), "  ".join("%s %s->%s" % m for m in mets)))
 
 
+SHEETS_EPOCH = dt.date(1899, 12, 30)                    # day 0 of a Google Sheets date serial
+
+
+def extend_dates(sh, ws, hdr_row, last_row, dates, today):
+    """Table 1 has one column per day. Add the days that have passed since the last header
+    (user, 21-Sep: the columns stopped at 18 Sep). Each new column is a copy of the last one,
+    so its per-date formulas and formatting come along and only the header date changes; the
+    'Total' column's SUM is stretched to the new last column. Returns the new date list."""
+    last_col, last_d = dates[-1]
+    missing = [last_d + dt.timedelta(days=k) for k in range(1, (today - last_d).days + 1)]
+    if not missing:
+        return dates
+    sid = ws.id
+    if ws.col_count < last_col + len(missing):
+        ws.resize(cols=last_col + len(missing))
+    box = lambda c: {"sheetId": sid, "startRowIndex": hdr_row - 1, "endRowIndex": last_row,
+                     "startColumnIndex": c - 1, "endColumnIndex": c}
+    sh.batch_update({"requests": [
+        {"copyPaste": {"source": box(last_col), "destination": box(last_col + k),
+                       "pasteType": "PASTE_NORMAL"}} for k in range(1, len(missing) + 1)]})
+    first = gspread.utils.rowcol_to_a1(hdr_row, last_col + 1)
+    last = gspread.utils.rowcol_to_a1(hdr_row, last_col + len(missing))
+    ws.update(values=[[(d - SHEETS_EPOCH).days for d in missing]],
+              range_name="%s:%s" % (first, last), value_input_option="RAW")
+
+    # the Total column adds up the date columns -- stretch it to the new last one
+    new_last = gspread.utils.rowcol_to_a1(1, last_col + len(missing)).rstrip("1")
+    old_last = gspread.utils.rowcol_to_a1(1, last_col).rstrip("1")
+    cur = ws.get("D%d:D%d" % (hdr_row + 1, last_row), value_render_option="FORMULA")
+    fix = []
+    for i, row in enumerate(cur):
+        f = row[0] if row else ""
+        r = hdr_row + 1 + i
+        want = "=SUM(E%d:%s%d)" % (r, new_last, r)
+        if isinstance(f, str) and f.replace(" ", "") == "=SUM(E%d:%s%d)" % (r, old_last, r):
+            fix.append({"range": "D%d" % r, "values": [[want]]})
+    if fix:
+        ws.batch_update(fix, value_input_option="USER_ENTERED")
+    print("  Table 1: added %d date column(s) %s (Total now sums E:%s)"
+          % (len(missing), ", ".join(d.strftime("%d %b") for d in missing), new_last))
+    return dates + [(last_col + k, d) for k, d in enumerate(missing, 1)]
+
+
 def name(pair):
     return "%s %s" % pair
 
@@ -787,6 +833,8 @@ def main():
     if not dates:
         print("ABORT: no date headers parsed from row %d" % hdr_row)
         return 1
+    dates = extend_dates(sh, ws, hdr_row, t1_total, dates,
+                         dt.datetime.now(dt.timezone(dt.timedelta(hours=5, minutes=30))).date())
 
     trk = {}
     tws = sh.get_worksheet_by_id(0)
