@@ -966,15 +966,17 @@ def main():
     t3_msg, _ = visits_table(gc, sh, ws, t2_total)
     print("  " + t3_msg)
     # Table 4 sits between Table 1 and Table 2 (above Table 2's two header rows + one gap row)
-    t4 = next((i + 1 for i in range(t1_total, t2_hdr - 1) if keys[i][0] == T4_TITLE), None)
-    if t4 is None:
-        t4 = t2_hdr - 2 - T4_ROWS
-        free = all(not v.strip() for r in ws.get_values("B%d:K%d" % (t4, t4 + T4_ROWS - 1)) for v in r)
-        if not free:
-            t4 = None
-    if t4 is None or t4 <= t1_total + 1 or t4 + T4_ROWS - 1 > t2_hdr - 2:
-        print("  WARNING: Table 4 skipped -- no room for %d rows between Table 1 (ends r%d) and Table 2 "
-              "(header r%d); insert rows above Table 2" % (T4_ROWS, t1_total, t2_hdr - 1))
+    # Table 4 sits three rows below Table 1's Total row. It is anchored on that row, NOT found by
+    # its title: on 21-Sep a run cleared the block and died before rewriting it, the title went with
+    # it, and every later run then "could not find" the table and skipped it (user, 22-Sep).
+    t4 = t1_total + 3
+    head = ws.get_values("B%d" % t4)
+    head = head[0][0].strip() if head and head[0] else ""
+    if head not in ("", T4_TITLE):
+        print("  WARNING: Table 4 skipped -- B%d holds %r, not this table" % (t4, head[:40]))
+    elif t4 + T4_ROWS + CT_ROWS > t2_hdr - 2:
+        print("  WARNING: Table 4 skipped -- Table 2's header (r%d) leaves no room at r%d"
+              % (t2_hdr - 1, t4))
     else:
         print("  " + contact_table(gc, sh, ws, t4, member, trk, post))
         # control group, right under the 2x2: Delhi + active CSPs this sheet does not work
@@ -982,7 +984,7 @@ def main():
         free = all(not v.strip() for r in ws.get_values("B%d:K%d" % (c_start, c_start + CT_ROWS - 1))
                    for v in r)
         titled = (ws.get_values("B%d" % c_start) or [[""]])[0][:1] == [CT_TITLE]
-        if (free or titled) and c_start + CT_ROWS - 1 <= t2_hdr - 2:
+        if (free or titled) and c_start + CT_ROWS - 1 <= t2_hdr - 2:  # same anchoring rule
             print("  " + control_table(sh, ws, c_start, set(trk) | nc))
         else:
             print("  WARNING: control table skipped -- needs %d free rows at r%d (Table 2 header r%d)"
