@@ -127,6 +127,8 @@ def bd_rows(gc, today):
         if prev and prev["_d"] >= d:            # keep the most recent visit
             continue
         w = g("winback").upper()
+        if not w:                               # outcome not filled in yet -- wait for it
+            continue
         out[cid] = {"_d": d, "name": g("partner name"),
                     "visit": d.strftime("%d/%m/%Y"),
                     "soft": "Y" if w.startswith("Y") else ("N" if w.startswith("N") else "")}
@@ -244,14 +246,21 @@ def main():
     cur = {k: [[g(r, k)] for r in rows] for k in ("visit", "soft", "ci", "opt750")}
 
     changes, in_scope = [], 0
-    for idx, r in enumerate(rows):                        # BD log: fill blanks only, never a call
+    # BD log: the NEWER contact wins (user, 23-Sep: Yarco was called 9 Sep and visited 23 Sep, so
+    # the visit date and its Yes replace the older call). An older BD visit never overwrites a
+    # newer tracker date.
+    for idx, r in enumerate(rows):
         cid = g(r, "csp")
         b = bd.get(cid)
         if not b:
             continue
+        held, _ = parse_visit(cur["visit"][idx][0].strip(), today)
+        if held and held >= b["_d"]:
+            continue
         for key, val in (("visit", b["visit"]), ("soft", b["soft"])):
-            if val and not cur[key][idx][0].strip():
-                changes.append((idx + FIRST_DATA_ROW, cid, key, "(blank, BD log)", val))
+            was = cur[key][idx][0].strip()
+            if val and was != val:
+                changes.append((idx + FIRST_DATA_ROW, cid, key, (was or "(blank)") + " BD", val))
                 cur[key][idx] = [val]
 
     for idx, r in enumerate(rows):
