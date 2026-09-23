@@ -89,7 +89,7 @@ NC = ("Non_compliant", "-")
 ORDER = [("89 Winback", "KF"), ("89 Winback", "Field"), ("Exit", "Field"), NC,
          ("P6_Fallouts", "KF"), ("P6_Fallouts", "Field"), ("750 Opt out", "Field"),
          ("Growth Team", "KF"), ("Growth Team", "Field"), ("Wrong enforcement", "KF"),
-         ("Delivery receipt pending", "KF"),
+         ("Delivery receipt pending", "KF"), ("BD winback", "Field"),
          ("P1", "KF"), ("P1", "Field"), ("P2", "KF"), ("P2", "Field")]
 CAT2BUCKET = {"Winback _ 89 CSPs": "89 Winback",
               "": "89 Winback",                # undated-category rows in the 89 block
@@ -104,11 +104,13 @@ CAT2BUCKET = {"Winback _ 89 CSPs": "89 Winback",
               "Non-compliant blocked": None,
               # auto-added by netbox_funnel.py: courier delivered, app receipt not accepted; its own
               # dashboard row since 18-Sep (user), so it DOES own the CSP
-              "Delivery receipt pending": "Delivery receipt pending"}
+              "Delivery receipt pending": "Delivery receipt pending",
+              # BD console visit log (Willing to Exit sheet tab), synced by sync_exit_visits.py
+              "BD winback": "BD winback"}
 NOT_OWNING = {"Previous Good installers", "Non-compliant blocked"}
 # buckets whose KF / Field is fixed; every other bucket is split by tracker column F
 FIXED_MODE = {"Exit": "Field", "750 Opt out": "Field", "Wrong enforcement": "KF",
-              "Delivery receipt pending": "KF"}
+              "Delivery receipt pending": "KF", "BD winback": "Field"}
 T2_COLS = "D%d:I%d"
 NC_TAB = "Non_compliant list"
 GREEN = {"red": 0.80, "green": 0.92, "blue": 0.82}

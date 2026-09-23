@@ -47,6 +47,8 @@ import gspread
 from winback_common import SHEET_ID, IST, gclient
 
 SOURCE_SHEET = "1WsADMo2slH0VZhCdBbAg2ortl6_AfTs-hSBvTBEoRto"   # Willing to Exit CSPs
+BD_TAB = "BD Console Log"         # mirror of the BD dashboard's visit log (sync_bd_visits.py)
+BD_CAT = "BD winback"             # tracker Category for a CSP this log brings in
 BACKUP_DIR = os.environ.get("WINBACK_BACKUP_DIR") or os.path.dirname(os.path.abspath(__file__))
 # tracker columns are resolved from header row 3 at run time (they move)
 FIRST_DATA_ROW = 4
@@ -94,6 +96,43 @@ def parse_visit(s, today):
     return None, "unreadable %r" % s
 
 
+def bd_rows(gc, today):
+    """Latest BD-console visit per CSP -> {csp: {"name","visit","soft"}} (user, 23-Sep).
+    The tab is a machine-written mirror: row 1 is its note, row 2 the header."""
+    try:
+        vals = gc.open_by_key(SOURCE_SHEET).worksheet(BD_TAB).get_values("A1:T2000")
+    except Exception as e:                      # tab renamed or not shared -- never fatal
+        print("   %s: %r -- skipped" % (BD_TAB, e))
+        return {}
+    hi = next((i for i, r in enumerate(vals[:5]) if r and r[0].strip().lower() == "date"), None)
+    if hi is None:
+        print("   %s: no 'Date' header in the first rows -- skipped" % BD_TAB)
+        return {}
+    hdr = [c.strip().lower() for c in vals[hi]]
+    need = {k: (hdr.index(k) if k in hdr else None)
+            for k in ("date", "csp id", "partner name", "winback")}
+    if need["csp id"] is None or need["date"] is None:
+        print("   %s: headers moved (%r) -- skipped" % (BD_TAB, vals[hi]))
+        return {}
+    out = {}
+    for r in vals[hi + 1:]:
+        g = lambda k: r[need[k]].strip() if need[k] is not None and len(r) > need[k] else ""
+        cid = g("csp id").lower()
+        if not re.fullmatch(r"a0[a-z0-9]{4}", cid):
+            continue
+        d, _ = parse_visit(g("date"), today)
+        if d is None:
+            continue
+        prev = out.get(cid)
+        if prev and prev["_d"] >= d:            # keep the most recent visit
+            continue
+        w = g("winback").upper()
+        out[cid] = {"_d": d, "name": g("partner name"),
+                    "visit": d.strftime("%d/%m/%Y"),
+                    "soft": "Y" if w.startswith("Y") else ("N" if w.startswith("N") else "")}
+    return out
+
+
 def main():
     today = dt.datetime.now(IST).date()
     gc = gclient()
@@ -123,6 +162,8 @@ def main():
         cat = r[ix_cat].strip() if ix_cat is not None and len(r) > ix_cat else ""
         if re.fullmatch(r"a0[a-z0-9]{4}", cid) and cat == "Exit" and cid not in sheet_exit:
             sheet_exit[cid] = (r[ix_name].strip() if ix_name is not None and len(r) > ix_name else "")
+
+    bd = bd_rows(gc, today)
 
     src, skipped, pending = {}, [], []
     for r in rows[1:]:
@@ -169,6 +210,8 @@ def main():
     rows = ws.get_values("A4:%s2000" % last_col)
     have = {r[pos["csp"]].strip() for r in rows if len(r) > pos["csp"] and r[pos["csp"]].strip()}
     fresh = [c for c in sheet_exit if c not in have]
+    bd_new = [c for c in bd if c not in have and c not in sheet_exit]
+    fresh += bd_new
     if fresh and not os.environ.get("DRY_RUN"):
         col = lambda i: gspread.utils.rowcol_to_a1(1, i + 1).rstrip("1")
         start = FIRST_DATA_ROW + max((i for i, r in enumerate(rows)
@@ -180,13 +223,18 @@ def main():
         else:
             ws.batch_update([{"range": "%s%d" % (col(pos[k]), start + n_), "values": [[v]]}
                              for n_, c in enumerate(fresh)
-                             for k, v in (("csp", c), ("cat", "Exit"), ("mode", "Visiting"))]
-                            + [{"range": "%s%d" % (col(pos["name"]), start + n_), "values": [[sheet_exit[c]]]}
+                             for k, v in (("csp", c),
+                                          ("cat", BD_CAT if c in bd_new else "Exit"),
+                                          ("mode", "Visiting"))]
+                            + [{"range": "%s%d" % (col(pos["name"]), start + n_),
+                                "values": [[sheet_exit.get(c) or bd.get(c, {}).get("name", "")]]}
                                for n_, c in enumerate(fresh)], value_input_option="RAW")
-            print("   added %d Exit CSPs to the tracker at row %d: %s" % (len(fresh), start, fresh))
+            if bd_new:
+                print("   of those, %d came from %s as %r: %s" % (len(bd_new), BD_TAB, BD_CAT, bd_new))
+            print("   added %d CSPs to the tracker at row %d: %s" % (len(fresh), start, fresh))
             rows = ws.get_values("A4:%s2000" % last_col)
     elif fresh:
-        print("   DRY: %d Exit CSPs would be added to the tracker: %s" % (len(fresh), fresh))
+        print("   DRY: %d CSPs would be added to the tracker: %s" % (len(fresh), fresh))
     n = len(rows)
 
     def g(r, key):
@@ -196,6 +244,16 @@ def main():
     cur = {k: [[g(r, k)] for r in rows] for k in ("visit", "soft", "ci", "opt750")}
 
     changes, in_scope = [], 0
+    for idx, r in enumerate(rows):                        # BD log: fill blanks only, never a call
+        cid = g(r, "csp")
+        b = bd.get(cid)
+        if not b:
+            continue
+        for key, val in (("visit", b["visit"]), ("soft", b["soft"])):
+            if val and not cur[key][idx][0].strip():
+                changes.append((idx + FIRST_DATA_ROW, cid, key, "(blank, BD log)", val))
+                cur[key][idx] = [val]
+
     for idx, r in enumerate(rows):
         csp = g(r, "csp")
         if not csp or csp not in src:
