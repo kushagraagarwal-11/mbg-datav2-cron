@@ -32,7 +32,7 @@ IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
 
 TOKEN = os.environ["SLACK_BOT_TOKEN"]
 CHANNEL_ID = os.environ.get("SLACK_CHANNEL_ID")
-GONE = "Returned +\ndeployed +\nother"
+GONE = "No longer\nat CSP office"
 
 
 def box(ax, x, y, w, h, title, val, sub=None, fill="white", edge=LINE, fg=INK,
@@ -56,7 +56,7 @@ def elbow(ax, x0, y0, x1, y1, color=LINE):
     ax.plot([x1, x1], [mid, y1], color=color, lw=1.1, zorder=1)
 
 
-def draw(d, meta, stamp, path):
+def draw(d, meta, OTHER, stamp, path):
     fig = plt.figure(figsize=(26, 13), facecolor="white")
     ax = fig.add_axes([0, 0, 1, 1]); ax.set_xlim(0, 100); ax.set_ylim(2, 100); ax.axis("off")
 
@@ -77,12 +77,6 @@ def draw(d, meta, stamp, path):
         fill=PINK, edge=PINK, fg="white", title_size=10.5, val_size=16, lw=0)
     elbow(ax, 50, 76.4, 50, 73)
 
-    ax.plot([1, 99], [64.5, 64.5], color="#d0d0d0", lw=1, ls=(0, (6, 4)), zorder=0)
-    ax.text(1.5, 65.9, "FROZEN  ·  status on 22 Sep", fontsize=8.5, color=MUTED,
-            fontweight="bold", va="center")
-    ax.text(1.5, 63.0, "LIVE  ·  where they are now", fontsize=8.5, color=PINK,
-            fontweight="bold", va="center")
-
     # 12 child boxes share one row of equal slots; each branch sits over its own four
     N = 12
     XS = [3 + i * (94.0 / (N - 1)) for i in range(N)]
@@ -97,8 +91,29 @@ def draw(d, meta, stamp, path):
             fill=bg, edge=fg, fg=fg, title_size=10, val_size=14, lw=1.7)
         elbow(ax, 50, 67, CEN[name], 60)
 
+    # the freeze covers the 22-Sep status row above; everything under this line is live
+    ax.plot([1, 99], [50.5, 50.5], color="#d0d0d0", lw=1, ls=(0, (6, 4)), zorder=0)
+    ax.text(1.5, 52.6, "FROZEN  ·  status on 22 Sep", fontsize=8.5, color=MUTED,
+            fontweight="bold", va="center")
+    ax.text(1.5, 48.4, "LIVE  ·  where they are now", fontsize=8.5, color=PINK,
+            fontweight="bold", va="center")
+
+    NICE = {"DEPLOYED": "redeployed to a customer", "RETURNED": "returned to WH",
+            "LOST": "lost", "WRITTEN_OFF": "written off",
+            "CUSTOMER_RECOVERY_PENDING": "customer recovery pending"}
+
+    def gone_detail(x, comp):
+        """Spell out the 'other' box instead of leaving it a catch-all."""
+        y = 37.0
+        for st, n in sorted(comp.items(), key=lambda kv: -kv[1]):
+            ax.text(x - 3.6, y, "{:,}".format(n), ha="left", va="center",
+                    fontsize=6.8, color=OK_FG, fontweight="bold")
+            ax.text(x + 3.7, y, NICE.get(st, st.title()), ha="right", va="center",
+                    fontsize=5.6, color=MUTED)
+            y -= 1.9
+
     def kid(x, title, val, bg, fg, sub=None):
-        box(ax, x, 44, 8.0, 6.6, title, val, sub=sub, fill=bg, edge=fg, fg=fg,
+        box(ax, x, 42.5, 8.0, 6.6, title, val, sub=sub, fill=bg, edge=fg, fg=fg,
             title_size=7.0, val_size=10.5)
 
     for name in ("Idle", "Custodied"):
@@ -107,11 +122,11 @@ def draw(d, meta, stamp, path):
         kids = ((xs4[0], "Carry fee\napplying", s2.get("cf", 0), CF_BG, CF_FG, None),
                 (xs4[1], "Carry fee\nNOT applying", s2.get("nocf", 0), HOLD_BG, HOLD_FG, None),
                 (xs4[2], "Retrieval\npending now", s2.get("rp", 0), RP_BG, RP_FG, None),
-                (xs4[3], GONE, s2.get("gone", 0), OK_BG, OK_FG,
-                 "%s returned" % "{:,}".format(s2.get("gone_ret", 0))))
+                (xs4[3], GONE, s2.get("gone", 0), OK_BG, OK_FG, None))
         for x, t, v, b2, f2, sb in kids:
             kid(x, t, v, b2, f2, sb)
-            elbow(ax, CEN[name], 54, x, 47.3)
+            elbow(ax, CEN[name], 54, x, 45.8)
+        gone_detail(xs4[3], OTHER[name])
 
     s = d["Retrieval pending"]
     ni = s.get("idle_cf", 0) + s.get("idle_nocf", 0)
@@ -120,11 +135,11 @@ def draw(d, meta, stamp, path):
     rkids = ((xs4[0], "Now idle", ni, HOLD_BG, HOLD_FG, None),
              (xs4[1], "Now custodied", nc, HOLD_BG, HOLD_FG, None),
              (xs4[2], "Still retrieval\npending", s.get("still", 0), RP_BG, RP_FG, None),
-             (xs4[3], GONE, s.get("gone", 0), OK_BG, OK_FG,
-              "%s returned" % "{:,}".format(s.get("gone_ret", 0))))
+             (xs4[3], GONE, s.get("gone", 0), OK_BG, OK_FG, None))
     for x, t, v, b2, f2, sb in rkids:
         kid(x, t, v, b2, f2, sb)
-        elbow(ax, CEN["Retrieval pending"], 54, x, 47.3)
+        elbow(ax, CEN["Retrieval pending"], 54, x, 45.8)
+    gone_detail(xs4[3], OTHER["Retrieval pending"])
     for px, pre in ((xs4[0], "idle"), (xs4[1], "cust")):
         for dx, lab, key in ((-2.1, "Carry fee\napplying", pre + "_cf"),
                              (2.1, "Carry fee\nNOT applying", pre + "_nocf")):
@@ -132,7 +147,7 @@ def draw(d, meta, stamp, path):
             box(ax, px + dx, 31, 4.0, 5.6, lab, s.get(key, 0),
                 fill=CF_BG if hot else HOLD_BG, edge=CF_FG if hot else HOLD_FG,
                 fg=CF_FG if hot else HOLD_FG, title_size=5.4, val_size=8.5)
-            elbow(ax, px, 40.7, px + dx, 33.8)
+            elbow(ax, px, 39.2, px + dx, 33.8)
 
     # ---- footer ----
     cf = (d["Idle"].get("cf", 0) + d["Custodied"].get("cf", 0)
@@ -149,7 +164,7 @@ def draw(d, meta, stamp, path):
             (stay, "still at CSP (idle / custodied)", HOLD_FG),
             (cf, "of those, carry fee applying", CF_FG),
             (rp, "retrieval pending", RP_FG),
-            (gone, "returned + deployed + other", OK_FG),
+            (gone, "no longer at CSP office", OK_FG),
             (ret, "of those, returned to WH", OK_FG))):
         x = 14 + j * 18
         ax.text(x, 10.2, "{:,}".format(v), ha="center", va="center", fontsize=14,
@@ -170,7 +185,8 @@ if __name__ == "__main__":
     stamp = datetime.datetime.now(IST).strftime("%d %b %Y")
     d = json.load(open("tree22.json"))
     meta = json.load(open("tree22_meta.json"))
-    p = draw(d, meta, stamp, "delhi_22sep_tree.png")
+    OTHER = json.load(open("other_split.json"))
+    p = draw(d, meta, OTHER, stamp, "delhi_22sep_tree.png")
     print("wrote", p, flush=True)
     if CHANNEL_ID:
         H = {"Authorization": "Bearer %s" % TOKEN}
