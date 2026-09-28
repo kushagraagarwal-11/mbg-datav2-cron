@@ -61,10 +61,10 @@ def draw(d, meta, OTHER, stamp, path):
     ax = fig.add_axes([0, 0, 1, 1]); ax.set_xlim(0, 100); ax.set_ylim(2, 100); ax.axis("off")
 
     grand = sum(d[b]["total"] for b in d)
-    ax.text(50, 96.5, "DELHI — devices at CSP office on 22-Sep-2026, and where they went",
+    ax.text(50, 96.5, "DELHI — devices at CSP office on %s, and where they went" % meta["long"],
             ha="center", fontsize=19, color=PINK, fontweight="bold")
-    ax.text(50, 93.6, "cohort frozen at 22-Sep  ·  everything below the second line is live as of %s"
-            % stamp, ha="center", fontsize=10, color=MUTED)
+    ax.text(50, 93.6, "cohort frozen at %s  ·  everything below the second line is live as of %s"
+            % (meta["label"], stamp), ha="center", fontsize=10, color=MUTED)
 
     box(ax, 50, 88, 26, 5.4, "Active CSPs in system", meta["active"],
         sub="Delhi %s  ·  Mumbai %s  ·  Bharat %s  ·  no city on record %s"
@@ -73,7 +73,7 @@ def draw(d, meta, OTHER, stamp, path):
     box(ax, 50, 79, 20, 5.2, "Delhi CSPs", meta["Delhi"], fill=NEUT,
         title_size=9.5, val_size=13)
     elbow(ax, 50, 85.3, 50, 81.6)
-    box(ax, 50, 70, 26, 6.0, "Devices at CSP office  (22 Sep)", grand,
+    box(ax, 50, 70, 26, 6.0, "Devices at CSP office  (%s)" % meta["label"], grand,
         fill=PINK, edge=PINK, fg="white", title_size=10.5, val_size=16, lw=0)
     elbow(ax, 50, 76.4, 50, 73)
 
@@ -93,7 +93,7 @@ def draw(d, meta, OTHER, stamp, path):
 
     # the freeze covers the 22-Sep status row above; everything under this line is live
     ax.plot([1, 99], [50.5, 50.5], color="#d0d0d0", lw=1, ls=(0, (6, 4)), zorder=0)
-    ax.text(1.5, 52.6, "FROZEN  ·  status on 22 Sep", fontsize=8.5, color=MUTED,
+    ax.text(1.5, 52.6, "FROZEN  ·  status on %s" % meta["label"], fontsize=8.5, color=MUTED,
             fontweight="bold", va="center")
     ax.text(1.5, 48.4, "LIVE  ·  where they are now", fontsize=8.5, color=PINK,
             fontweight="bold", va="center")
@@ -172,7 +172,7 @@ def draw(d, meta, OTHER, stamp, path):
         ax.text(x, 7.9, "%s  (%.0f%%)" % (lab, 100.0 * v / grand), ha="center",
                 va="center", fontsize=7.4, color=MUTED, zorder=3)
 
-    ax.text(50, 3.4, "Source: NETBOX_CUSTODY, SCD2 point-in-time slice at 22-Sep-2026 23:59 IST vs the live row.  "
+    ax.text(50, 3.4, "Source: NETBOX_CUSTODY, SCD2 point-in-time slice at %s 23:59 IST vs the live row.  " % meta["long"] +
                      "Active CSPs = CSP_ACCOUNT STATUS='ACTIVE'; city from PARTNER_JANAM_KUNDLI.  "
                      "PENDING_CSP_RECEIPT is counted inside Custodied.",
             ha="center", fontsize=7.6, color=MUTED)
@@ -186,7 +186,8 @@ if __name__ == "__main__":
     d = json.load(open("tree22.json"))
     meta = json.load(open("tree22_meta.json"))
     OTHER = json.load(open("other_split.json"))
-    p = draw(d, meta, OTHER, stamp, "delhi_22sep_tree.png")
+    p = draw(d, meta, OTHER, stamp,
+             "delhi_%s_tree.png" % meta["label"].lower().replace(" ", ""))
     print("wrote", p, flush=True)
     if CHANNEL_ID:
         H = {"Authorization": "Bearer %s" % TOKEN}
@@ -196,9 +197,9 @@ if __name__ == "__main__":
             requests.post(j["upload_url"], data=fh.read())
         r = requests.post("https://slack.com/api/files.completeUploadExternal", headers=H,
                           data={"files": json.dumps([{"id": j["file_id"],
-                                                      "title": "Delhi 22-Sep tree"}]),
+                                                      "title": "Delhi %s tree" % meta["label"]}]),
                                 "channel_id": CHANNEL_ID,
                                 "initial_comment":
-                                    "*Delhi — devices at CSP office 22-Sep, frozen, then followed live (%s)*"
-                                    % stamp}).json()
+                                    "*Delhi — devices at CSP office %s, frozen, then followed live (%s)*"
+                                    % (meta["label"], stamp)}).json()
         print("posted ok=%s %s" % (r.get("ok"), r.get("error") or ""), flush=True)
