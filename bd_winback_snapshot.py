@@ -38,20 +38,42 @@ IEC = "PROD_DB.DBT_CSP.TAS_INSTALL_EXECUTION_CANDIDATES"
 DAILY_DAYS = 45
 CHUNK = 60
 
-# Owner -> the Slack conversation his own snapshot goes to. Taken from each person's profile
-# pane, so nothing has to be looked up by email at run time. Override any of them with
-# SNAP_DM_<OWNER> if somebody's DM id changes.
-OWNER_DM = {
-    "Hammad": "D0965CS7S4W",       # hammad.siddiqui@wiom.in
-    "Manvendra": "D0A3ZMWDGA1",    # manvendra@wiom.in
-    "Shahrukh": "D0957BF5BCL",     # shahrukh.khan@wiom.in
-    "Shoib": "D096MNLDHU1",        # shoib.akhtar@wiom.in
-    "Sanoj": "D0964MM5WES",        # sanoj.singh@i2e1.com
+# Owner -> Slack USER id. Not a D... id: those belong to a specific pair of people, and the
+# ones on the profile panes are Palak's conversations - the bot is not in them and gets
+# channel_not_found. The bot opens its own DM with these instead, which its im:write allows.
+# It has no users:read.email, so the id cannot be derived from the address at run time; the
+# address is recorded beside each one so the mapping can be checked by eye.
+OWNER_USER = {
+    "Hammad": "U08C0SBJR9Q",     # hammad.siddiqui@wiom.in
+    "Manvendra": "U0A2FTGCPLK",  # manvendra@wiom.in
+    "Shahrukh": "U055PSVNA85",   # shahrukh.khan@wiom.in
+    "Shoib": "U06719JQVJ4",      # shoib.akhtar@wiom.in
+    "Sanoj": "U054T8UU3PY",      # sanoj.singh@i2e1.com
 }
+_DM_CACHE = {}
 
 
 def dm_for(owner):
-    return os.environ.get("SNAP_DM_" + owner.upper()) or OWNER_DM.get(owner)
+    """The bot's own DM channel with this owner, opened on demand and remembered."""
+    over = os.environ.get("SNAP_DM_" + owner.upper())
+    if over:
+        return over
+    uid = OWNER_USER.get(owner)
+    if not uid:
+        return None
+    if uid in _DM_CACHE:
+        return _DM_CACHE[uid]
+    tok = token()
+    if not tok:
+        return None
+    r = requests.post("https://slack.com/api/conversations.open",
+                      headers={"Authorization": "Bearer " + tok},
+                      data={"users": uid}).json()
+    if not r.get("ok"):
+        print("  could not open a DM with %s (%s): %s" % (owner, uid, r.get("error")))
+        return None
+    _DM_CACHE[uid] = r["channel"]["id"]
+    return _DM_CACHE[uid]
 
 INK = "#1a1d23"
 MUTED = "#8a8f98"
@@ -342,16 +364,21 @@ def check(targets):
     print("  granted scopes: %s" % a.headers.get("x-oauth-scopes", "(not reported)"))
     for who, ch in targets:
         if not ch:
-            print("  %-12s NO DESTINATION CONFIGURED" % who)
+            print("  %-12s NO DESTINATION - nothing will be sent" % who)
             continue
         r = requests.get("https://slack.com/api/conversations.info", headers=H,
                          params={"channel": ch}).json()
         if r.get("ok"):
             c = r["channel"]
-            print("  %-12s %s  ok  is_im=%s member=%s name=%s"
-                  % (who, ch, c.get("is_im"), c.get("is_member"), c.get("name", "(dm)")))
+            print("  %-12s %-14s reachable  is_im=%s member=%s"
+                  % (who, ch, c.get("is_im"), c.get("is_member")))
+        elif r.get("error") == "missing_scope":
+            # channels:read is not granted. That limits READING channel metadata; posting runs
+            # on chat:write and files:write, which are. Not a reason to hold the send.
+            print("  %-12s %-14s cannot read metadata (no channels:read) - posting is "
+                  "unaffected" % (who, ch))
         else:
-            print("  %-12s %s  CANNOT REACH: %s" % (who, ch, r.get("error")))
+            print("  %-12s %-14s CANNOT REACH: %s" % (who, ch, r.get("error")))
 
 
 def post(paths, note, ch):
