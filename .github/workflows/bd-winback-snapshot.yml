@@ -7,12 +7,17 @@ on:
     - cron: '30 2 * * *'
   workflow_dispatch:
     inputs:
-      dm:
-        description: 'DM this email instead of posting to the channel (blank = channel)'
+      channel:
+        description: 'Slack channel ID to post to (the bot must be invited there first)'
         required: false
-        default: 'palak.vardhan@wiom.in'
+        default: ''
+      dm:
+        description: 'DM this email instead. Needs users:read.email + im:write on the bot,
+          which it does not have yet - a DM attempt returns missing_scope.'
+        required: false
+        default: ''
       dry_run:
-        description: 'Render only, post nothing'
+        description: 'Render only, post nothing (images still attach to the run)'
         required: false
         default: 'false'
 
@@ -31,10 +36,13 @@ jobs:
           SLACK_BOT_TOKEN: ${{ secrets.PAYOUT750_SLACK_TOKEN }}
           GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
           MB_KEY: ${{ secrets.MB_KEY }}
-          # WHILE TESTING this goes to one person, not a channel. To switch it to a channel,
-          # set SNAP_DM to '' below and add SLACK_CHANNEL_ID - the bot must be invited there
-          # first or the upload returns not_in_channel.
-          SNAP_DM: ${{ github.event.inputs.dm || 'palak.vardhan@wiom.in' }}
+          # A channel is the only destination that works today: the Project Dominance bot has
+          # only ever posted to channels, so it lacks users:read.email and a DM attempt comes
+          # back missing_scope. Grant that plus im:write and reinstall if you want DMs.
+          # The bot must be a member of whichever channel this is, or the upload returns
+          # not_in_channel.
+          SLACK_CHANNEL_ID: ${{ github.event.inputs.channel || secrets.BD_SNAPSHOT_CHANNEL_ID }}
+          SNAP_DM: ${{ github.event.inputs.dm }}
           DRY_RUN: ${{ github.event.inputs.dry_run == 'true' && '1' || '0' }}
         run: python bd_winback_snapshot.py
       - name: Keep the images on the run
