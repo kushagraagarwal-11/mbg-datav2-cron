@@ -1,0 +1,46 @@
+name: BD winback snapshot (daily 08:00 IST)
+
+on:
+  schedule:
+    # 08:00 IST. GitHub throttles scheduled runs so the real firing time drifts later;
+    # nothing in this report depends on the minute, only on which day it reads as.
+    - cron: '30 2 * * *'
+  workflow_dispatch:
+    inputs:
+      dm:
+        description: 'DM this email instead of posting to the channel (blank = channel)'
+        required: false
+        default: 'palak.vardhan@wiom.in'
+      dry_run:
+        description: 'Render only, post nothing'
+        required: false
+        default: 'false'
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - run: pip install gspread google-auth requests matplotlib
+      - name: Render + post the winback snapshot
+        env:
+          # Project Dominance bot, same one the device-recovery funnel posts with.
+          SLACK_BOT_TOKEN: ${{ secrets.PAYOUT750_SLACK_TOKEN }}
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+          MB_KEY: ${{ secrets.MB_KEY }}
+          # WHILE TESTING this goes to one person, not a channel. To switch it to a channel,
+          # set SNAP_DM to '' below and add SLACK_CHANNEL_ID - the bot must be invited there
+          # first or the upload returns not_in_channel.
+          SNAP_DM: ${{ github.event.inputs.dm || 'palak.vardhan@wiom.in' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run == 'true' && '1' || '0' }}
+        run: python bd_winback_snapshot.py
+      - name: Keep the images on the run
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: winback-snapshot
+          path: out/*.png
+          retention-days: 14
