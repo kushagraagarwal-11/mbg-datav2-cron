@@ -9,6 +9,11 @@ on:
     - cron: '30 2 * * *'
   workflow_dispatch:
     inputs:
+      preview_user:
+        description: 'Slack USER id to preview to. Sends EVERYTHING to just that person and
+          nothing to the owners or the channel. Palak = U08RVLH5QS3'
+        required: false
+        default: ''
       check_only:
         description: 'Verify the bot can reach every DM and the channel. Sends NOTHING.'
         required: false
@@ -36,6 +41,7 @@ jobs:
           # #execution-leadership - the channel the 21:00 funnel already posts to. It gets the
           # all-owners summary plus every owner's sheet; each owner gets only his own, by DM.
           SLACK_CHANNEL_ID: ${{ secrets.DEVICE_FUNNEL_CHANNEL_ID }}
+          PREVIEW_USER: ${{ github.event.inputs.preview_user }}
           CHECK_ONLY: ${{ github.event.inputs.check_only == 'true' && '1' || '0' }}
           DRY_RUN: ${{ github.event.inputs.dry_run == 'true' && '1' || '0' }}
         run: python bd_winback_snapshot.py

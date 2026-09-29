@@ -53,12 +53,8 @@ OWNER_USER = {
 _DM_CACHE = {}
 
 
-def dm_for(owner):
-    """The bot's own DM channel with this owner, opened on demand and remembered."""
-    over = os.environ.get("SNAP_DM_" + owner.upper())
-    if over:
-        return over
-    uid = OWNER_USER.get(owner)
+def dm_channel(uid):
+    """The bot's own DM channel with a user id, opened on demand and remembered."""
     if not uid:
         return None
     if uid in _DM_CACHE:
@@ -70,10 +66,15 @@ def dm_for(owner):
                       headers={"Authorization": "Bearer " + tok},
                       data={"users": uid}).json()
     if not r.get("ok"):
-        print("  could not open a DM with %s (%s): %s" % (owner, uid, r.get("error")))
+        print("  could not open a DM with %s: %s" % (uid, r.get("error")))
         return None
     _DM_CACHE[uid] = r["channel"]["id"]
     return _DM_CACHE[uid]
+
+
+def dm_for(owner):
+    return (os.environ.get("SNAP_DM_" + owner.upper())
+            or dm_channel(OWNER_USER.get(owner)))
 
 INK = "#1a1d23"
 MUTED = "#8a8f98"
@@ -445,6 +446,16 @@ def main():
             "*%d ignored*. Worst non-responder first; each cell is the share of that day's "
             "leads the CSP never answered." % (stamp, A[0], A[1], A[2], A[3]))
     lead_ch = os.environ.get("SLACK_CHANNEL_ID")
+
+    # PREVIEW: one person sees everything and nobody else is touched. Deliberately an
+    # early return - a preview that also posted to the owners would not be a preview.
+    prev = os.environ.get("PREVIEW_USER", "").strip()
+    if prev:
+        ch = dm_channel(prev)
+        print("PREVIEW -> %s (%s) - owners and the channel are NOT posted to" % (prev, ch))
+        post(paths, head + "\n\n_Preview only \u2014 the owners and #execution-leadership "
+             "have not been sent anything. The summary is first, then one per owner._", ch)
+        return
 
     if os.environ.get("CHECK_ONLY") == "1":
         print("CHECK_ONLY=1 - verifying access, sending nothing")
