@@ -38,6 +38,21 @@ IEC = "PROD_DB.DBT_CSP.TAS_INSTALL_EXECUTION_CANDIDATES"
 DAILY_DAYS = 45
 CHUNK = 60
 
+# Owner -> the Slack conversation his own snapshot goes to. Taken from each person's profile
+# pane, so nothing has to be looked up by email at run time. Override any of them with
+# SNAP_DM_<OWNER> if somebody's DM id changes.
+OWNER_DM = {
+    "Hammad": "D0965CS7S4W",       # hammad.siddiqui@wiom.in
+    "Manvendra": "D0A3ZMWDGA1",    # manvendra@wiom.in
+    "Shahrukh": "D0957BF5BCL",     # shahrukh.khan@wiom.in
+    "Shoib": "D096MNLDHU1",        # shoib.akhtar@wiom.in
+    "Sanoj": "D0964MM5WES",        # sanoj.singh@i2e1.com
+}
+
+
+def dm_for(owner):
+    return os.environ.get("SNAP_DM_" + owner.upper()) or OWNER_DM.get(owner)
+
 INK = "#1a1d23"
 MUTED = "#8a8f98"
 LINE = "#dfe3e8"
@@ -308,25 +323,47 @@ def draw(days, rows, title, sub, path, show_owner=False, quiet=0):
     return path
 
 
-def post(paths, note, dm=None):
-    """Upload to Slack. Needs SLACK_BOT_TOKEN; the channel is SLACK_CHANNEL_ID, or a DM opened
-    against the email in --dm."""
-    tok = (os.environ.get("SLACK_BOT_TOKEN")
-           or os.environ.get("PAYOUT750_SLACK_TOKEN"))
+def token():
+    return os.environ.get("SLACK_BOT_TOKEN") or os.environ.get("PAYOUT750_SLACK_TOKEN")
+
+
+def check(targets):
+    """Read-only: can this bot see, and post into, each destination? Sends nothing.
+
+    Exists because the alternative way to find out is to spam five people at 8am."""
+    tok = token()
     if not tok:
-        print("  SLACK_BOT_TOKEN not set - rendered only, nothing posted")
+        print("  no token - cannot check")
+        return
+    H = {"Authorization": "Bearer " + tok}
+    a = requests.post("https://slack.com/api/auth.test", headers=H)
+    j = a.json()
+    print("  auth.test ok=%s bot=%s team=%s" % (j.get("ok"), j.get("user"), j.get("team")))
+    print("  granted scopes: %s" % a.headers.get("x-oauth-scopes", "(not reported)"))
+    for who, ch in targets:
+        if not ch:
+            print("  %-12s NO DESTINATION CONFIGURED" % who)
+            continue
+        r = requests.get("https://slack.com/api/conversations.info", headers=H,
+                         params={"channel": ch}).json()
+        if r.get("ok"):
+            c = r["channel"]
+            print("  %-12s %s  ok  is_im=%s member=%s name=%s"
+                  % (who, ch, c.get("is_im"), c.get("is_member"), c.get("name", "(dm)")))
+        else:
+            print("  %-12s %s  CANNOT REACH: %s" % (who, ch, r.get("error")))
+
+
+def post(paths, note, ch):
+    """Upload the given images into one conversation."""
+    tok = token()
+    if not tok:
+        print("  no token - rendered only, nothing posted")
+        return False
+    if not ch:
+        print("  no destination - nothing posted")
         return False
     H = {"Authorization": "Bearer " + tok}
-    ch = os.environ.get("SLACK_CHANNEL_ID")
-    if dm:
-        u = requests.get("https://slack.com/api/users.lookupByEmail", headers=H,
-                         params={"email": dm}).json()
-        if not u.get("ok"):
-            print("  could not find %s: %s" % (dm, u.get("error")))
-            return False
-        c = requests.post("https://slack.com/api/conversations.open", headers=H,
-                          data={"users": u["user"]["id"]}).json()
-        ch = c["channel"]["id"]
     for k, p in enumerate(paths):
         j = requests.post("https://slack.com/api/files.getUploadURLExternal", headers=H,
                           data={"filename": os.path.basename(p),
@@ -337,7 +374,8 @@ def post(paths, note, dm=None):
                                                       "title": os.path.basename(p)}]),
                                 "channel_id": ch,
                                 "initial_comment": note if k == 0 else ""}).json()
-        print("  posted %s ok=%s %s" % (os.path.basename(p), r.get("ok"), r.get("error") or ""))
+        print("  -> %-28s %-14s ok=%s %s" % (os.path.basename(p), ch, r.get("ok"),
+                                               r.get("error") or ""))
     return True
 
 
@@ -362,6 +400,7 @@ def main():
          % (len(rows), stamp), p, show_owner=True, quiet=len(quiet))
     paths.append(p)
     print("  %-26s %3d CSPs" % ("ALL", len(rows)), flush=True)
+    by_owner = {}
     for owner in sorted({r["owner"] for r in rows}):
         mine = [r for r in rows if r["owner"] == owner]
         qn = len([q for q in quiet if q["owner"] == owner])
@@ -370,16 +409,33 @@ def main():
              "%d CSPs \u00b7 day by day since each was won back \u00b7 %s \u00b7 worst first"
              % (len(mine), stamp), q, quiet=qn)
         paths.append(q)
-        print("  %-26s %3d CSPs" % (owner, len(mine)), flush=True)
+        by_owner[owner] = (q, len(mine), qn)
+        print("  %-26s %3d CSPs  -> %s" % (owner, len(mine), dm_for(owner) or "NO DM SET"),
+              flush=True)
     A = [sum((r["y"] or [0, 0, 0, 0])[i] for r in rows) for i in range(4)]
-    note = ("*Soft winback \u2014 daily snapshot (%s)*\n"
+    head = ("*Soft winback \u2014 daily snapshot (%s)*\n"
             "Yesterday: %d offered \u00b7 %d assigned \u00b7 %d installed \u00b7 "
             "*%d ignored*. Worst non-responder first; each cell is the share of that day's "
             "leads the CSP never answered." % (stamp, A[0], A[1], A[2], A[3]))
+    lead_ch = os.environ.get("SLACK_CHANNEL_ID")
+
+    if os.environ.get("CHECK_ONLY") == "1":
+        print("CHECK_ONLY=1 - verifying access, sending nothing")
+        check([(o, dm_for(o)) for o in sorted(by_owner)] + [("leadership", lead_ch)])
+        return
     if os.environ.get("DRY_RUN") == "1":
         print("DRY_RUN=1 - rendered only, nothing posted")
         return
-    post(paths, note, os.environ.get("SNAP_DM") or None)
+
+    # each owner gets only his own
+    for owner, (img, n, qn) in sorted(by_owner.items()):
+        y = [sum((r["y"] or [0, 0, 0, 0])[i] for r in rows if r["owner"] == owner)
+             for i in range(4)]
+        post([img], "*Your winback CSPs \u2014 %s*\nYesterday: %d offered \u00b7 %d assigned "
+             "\u00b7 %d installed \u00b7 *%d ignored*. Worst first \u2014 start at the top."
+             % (stamp, y[0], y[1], y[2], y[3]), dm_for(owner))
+    # leadership gets the summary first, then every owner's
+    post(paths, head, lead_ch)
 
 
 if __name__ == "__main__":
