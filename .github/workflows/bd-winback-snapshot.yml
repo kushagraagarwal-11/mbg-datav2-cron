@@ -2,11 +2,18 @@ name: BD winback snapshot (daily 08:00 IST)
 
 on:
   schedule:
-    # 08:00 IST. GitHub throttles scheduled runs so the real firing time drifts later; nothing
-    # in this report depends on the minute, only on which day it reads as. First automatic run
-    # is the morning after this lands - the report is about YESTERDAY, so a same-day manual run
-    # would show the same numbers anyway.
-    - cron: '30 2 * * *'
+    # Target is 08:00 IST, but GitHub's scheduler is best-effort and on this repo it misses
+    # badly: the device funnel's 15:30 cron has fired anywhere from 18:40 to 21:18, and this
+    # job's single 02:30 slot fired once 6h16m late and then skipped a day outright.
+    #
+    # So fire from four slots and let the script no-op when today's summary is already in the
+    # channel - whichever slot actually runs first does the work. Odd minutes on purpose; the
+    # top and the half of the hour are the congested ones. The report is about YESTERDAY, so
+    # an early slot is not a wrong number, only an early one.
+    - cron: '7 1 * * *'     # 06:37 IST - primary; an hour of drift still lands before 08:00
+    - cron: '17 2 * * *'    # 07:47 IST
+    - cron: '23 3 * * *'    # 08:53 IST
+    - cron: '43 5 * * *'    # 11:13 IST - last resort, so a bad morning still reports
   workflow_dispatch:
     inputs:
       preview_user:
@@ -20,6 +27,10 @@ on:
         default: 'true'
       dry_run:
         description: 'Render only, post nothing (images still attach to the run)'
+        required: false
+        default: 'false'
+      force:
+        description: 'Post again even if today''s snapshot already went out.'
         required: false
         default: 'false'
 
@@ -44,6 +55,7 @@ jobs:
           PREVIEW_USER: ${{ github.event.inputs.preview_user }}
           CHECK_ONLY: ${{ github.event.inputs.check_only == 'true' && '1' || '0' }}
           DRY_RUN: ${{ github.event.inputs.dry_run == 'true' && '1' || '0' }}
+          FORCE: ${{ github.event.inputs.force == 'true' && '1' || '0' }}
         run: python bd_winback_snapshot.py
       - name: Keep the images on the run
         if: always()

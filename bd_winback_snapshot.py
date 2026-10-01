@@ -382,6 +382,39 @@ def check(targets):
             print("  %-12s %-14s CANNOT REACH: %s" % (who, ch, r.get("error")))
 
 
+def already_posted(ch, stamp):
+    """Has today's summary already landed in `ch`? Returns True only on a definite yes.
+
+    Several cron slots now fire this job because any one of them may be hours late or skipped
+    (see the workflow). They must not all post. The marker is the date stamp in the summary's
+    own first line, so the check asks the real question - did the team get it - rather than
+    trusting a proxy like "did a run succeed".
+
+    Unknown counts as NOT posted. Missing the 8am report is the failure being fixed here; a
+    duplicate is an annoyance, so the uncertain case goes toward sending."""
+    tok = token()
+    if not tok or not ch:
+        return False
+    H = {"Authorization": "Bearer " + tok}
+    try:
+        r = requests.get("https://slack.com/api/conversations.history", headers=H,
+                         params={"channel": ch, "limit": 60}).json()
+    except Exception as e:
+        print("  history unreadable (%s) - treating as not yet posted" % e)
+        return False
+    if not r.get("ok"):
+        # Most likely channels:history is not granted. Say so plainly rather than silently
+        # behaving as though the check had passed.
+        print("  cannot read channel history (%s) - cannot tell if today's post already went, "
+              "so sending" % r.get("error"))
+        return False
+    needle = "daily snapshot (%s)" % stamp
+    for m in r.get("messages", []):
+        if needle in (m.get("text") or ""):
+            return True
+    return False
+
+
 def post(paths, note, ch):
     """Upload the given images into one conversation."""
     tok = token()
@@ -460,9 +493,16 @@ def main():
     if os.environ.get("CHECK_ONLY") == "1":
         print("CHECK_ONLY=1 - verifying access, sending nothing")
         check([(o, dm_for(o)) for o in sorted(by_owner)] + [("leadership", lead_ch)])
+        print("  duplicate guard: already posted today = %s" % already_posted(lead_ch, stamp))
         return
     if os.environ.get("DRY_RUN") == "1":
         print("DRY_RUN=1 - rendered only, nothing posted")
+        return
+
+    # Several cron slots fire this job; the first one to actually run posts, the others stop here.
+    if os.environ.get("FORCE") != "1" and already_posted(lead_ch, stamp):
+        print("today's snapshot (%s) is already in the leadership channel - nothing to do.\n"
+              "Pass force=true on a manual run to post it again." % stamp)
         return
 
     # each owner gets only his own
