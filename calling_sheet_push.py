@@ -121,7 +121,9 @@ kapture_base AS (
          ('Not Pick / Unreachable / Switched Off / Call by Mistake', 'Duplicate Tickets',
           'Want partnership of wiom',
           -- post-18-Sep-2026 taxonomy names for the same two things
-          'DUPLICATE TICKET RECEIVED', 'NUMBER UNREACHABLE / CALL NOT PICKED'))
+          'DUPLICATE TICKET RECEIVED', 'NUMBER UNREACHABLE / CALL NOT PICKED',
+          -- dropped from PSAT calling on 6-Oct-2026 (team request)
+          'FOLLOW UP ON EXISTING CSP TICKET', 'CALL DISCONNECTED'))
     AND (k.CUSTOMER_NAME IS NULL OR UPPER(k.CUSTOMER_NAME) != 'SANJAY_WIOM_TEST_ACCOUNT')
   QUALIFY ROW_NUMBER() OVER (PARTITION BY k.TICKET_NO ORDER BY k.INGESTED_AT DESC NULLS LAST) = 1
 ),
@@ -307,6 +309,9 @@ EXCLUDED_FOLDERS = {
     # Same two categories under the 18-Sep-2026 Kapture taxonomy rebuild.
     "DUPLICATE TICKET RECEIVED": "REMOVED - Duplicate",
     "NUMBER UNREACHABLE / CALL NOT PICKED": "REMOVED - Not Pick",
+    # Dropped from PSAT calling on 6-Oct-2026 (team request).
+    "FOLLOW UP ON EXISTING CSP TICKET": "REMOVED - Follow up",
+    "CALL DISCONNECTED": "REMOVED - Call disconnected",
 }
 
 # Current disposition of specific tickets — looked up by explicit Ticket ID (NO
