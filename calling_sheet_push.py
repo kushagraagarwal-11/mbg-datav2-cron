@@ -10,7 +10,7 @@ import json
 import os
 import sys
 import tempfile
-from datetime import datetime
+from datetime import datetime, date
 
 import requests
 import gspread
@@ -319,6 +319,21 @@ EXCLUDED_FOLDERS = {
     "REPEAT CALL": "REMOVED - Repeat call",
 }
 
+# Exclusions that apply only to rows dated on/after a given day (sheet col A,
+# DD/MM/YYYY). Earlier rows keep their bucket so already-reported months are
+# not restated. Folders not listed here are excluded regardless of date.
+EXCLUDED_FROM = {
+    "REPEAT CALL": date(2026, 10, 1),   # team: "only remove for October"
+}
+
+
+def _row_date(s):
+    """Parse a sheet Date cell (DD/MM/YYYY) -> date, or None if unparseable."""
+    try:
+        return datetime.strptime(s.strip(), "%d/%m/%Y").date()
+    except (ValueError, AttributeError):
+        return None
+
 # Current disposition of specific tickets — looked up by explicit Ticket ID (NO
 # exclusion filter, so we can also SEE the ones now tagged Duplicate/Not-Pick).
 # Queried by ID (not by date window) so it never hits Metabase's ~2000-row cap:
@@ -400,6 +415,11 @@ def reconcile_recent(ws=None, lookback_rows=2000):
         if l1 not in PARTNER_FOLDERS:
             target = "REMOVED - Customer ticket"
         elif folder in EXCLUDED_FOLDERS:
+            eff = EXCLUDED_FROM.get(folder)
+            if eff is not None:
+                d = _row_date(r[0])
+                if d is None or d < eff:
+                    continue  # before this exclusion took effect — leave as-is
             target = EXCLUDED_FOLDERS[folder]
         elif newb in ("L1", "L2", "NewProject"):
             target = newb
