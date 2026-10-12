@@ -123,7 +123,10 @@ kapture_base AS (
           -- post-18-Sep-2026 taxonomy names for the same two things
           'DUPLICATE TICKET RECEIVED', 'NUMBER UNREACHABLE / CALL NOT PICKED',
           -- dropped from PSAT calling on 6-Oct-2026 (team request)
-          'FOLLOW UP ON EXISTING CSP TICKET', 'CALL DISCONNECTED'))
+          'FOLLOW UP ON EXISTING CSP TICKET', 'CALL DISCONNECTED',
+          -- dropped from PSAT calling on 12-Oct-2026 (team request): CSP calling
+          -- again about an already-open ticket (level-4 leaf under TICKETS RELATED)
+          'REPEAT CALL'))
     AND (k.CUSTOMER_NAME IS NULL OR UPPER(k.CUSTOMER_NAME) != 'SANJAY_WIOM_TEST_ACCOUNT')
   QUALIFY ROW_NUMBER() OVER (PARTITION BY k.TICKET_NO ORDER BY k.INGESTED_AT DESC NULLS LAST) = 1
 ),
@@ -312,6 +315,8 @@ EXCLUDED_FOLDERS = {
     # Dropped from PSAT calling on 6-Oct-2026 (team request).
     "FOLLOW UP ON EXISTING CSP TICKET": "REMOVED - Follow up",
     "CALL DISCONNECTED": "REMOVED - Call disconnected",
+    # Dropped from PSAT calling on 12-Oct-2026 (team request).
+    "REPEAT CALL": "REMOVED - Repeat call",
 }
 
 # Current disposition of specific tickets — looked up by explicit Ticket ID (NO
