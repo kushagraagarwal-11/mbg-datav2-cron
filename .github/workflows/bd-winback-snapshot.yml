@@ -1,19 +1,16 @@
 name: BD winback snapshot (daily 08:00 IST)
 
 on:
-  schedule:
-    # Target is 08:00 IST, but GitHub's scheduler is best-effort and on this repo it misses
-    # badly: the device funnel's 15:30 cron has fired anywhere from 18:40 to 21:18, and this
-    # job's single 02:30 slot fired once 6h16m late and then skipped a day outright.
-    #
-    # So fire from four slots and let the script no-op when today's summary is already in the
-    # channel - whichever slot actually runs first does the work. Odd minutes on purpose; the
-    # top and the half of the hour are the congested ones. The report is about YESTERDAY, so
-    # an early slot is not a wrong number, only an early one.
-    - cron: '7 1 * * *'     # 06:37 IST - primary; an hour of drift still lands before 08:00
-    - cron: '17 2 * * *'    # 07:47 IST
-    - cron: '23 3 * * *'    # 08:53 IST
-    - cron: '43 5 * * *'    # 11:13 IST - last resort, so a bad morning still reports
+  # SCHEDULE OFF, 17-Oct-2026, on Palak's call: the per-owner winback grids were
+  # going into #execution-leadership every morning and are not what that channel
+  # is reading any more. Nothing is deleted - the job still runs on demand from
+  # the Actions tab, and putting the four cron lines back below turns the daily
+  # post on again exactly as it was.
+  #
+  #  - cron: '7 1 * * *'     # 06:37 IST
+  #  - cron: '17 2 * * *'    # 07:47 IST
+  #  - cron: '23 3 * * *'    # 08:53 IST
+  #  - cron: '43 5 * * *'    # 11:13 IST
   workflow_dispatch:
     inputs:
       preview_user:
