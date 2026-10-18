@@ -1,11 +1,12 @@
 name: Device Recovery Funnel (daily 21:00 IST)
 
 on:
-  schedule:
-    # 21:00 IST. GitHub throttles scheduled runs, so the real firing time drifts
-    # later — a 21:00 cron has landed as late as 00:15 IST, which then stamps the
-    # chart with the NEXT day's date. Nothing in the report depends on the minute.
-    - cron: '30 15 * * *'
+  # STOPPED 18-Oct-2026 at the user's request — no more daily posts to
+  # #execution-leadership. The workflow is also disabled in the Actions UI;
+  # re-enabling there alone will NOT restart it while this stays commented out.
+  # To resume: uncomment the schedule AND re-enable the workflow.
+  # schedule:
+  #   - cron: '30 15 * * *'      # 21:00 IST
   workflow_dispatch:
 
 jobs:
