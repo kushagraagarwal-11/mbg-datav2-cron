@@ -49,7 +49,8 @@ f0 as (select f.connection_id, f.csp_id, min(convert_timezone('UTC', f.created_a
          max(case when f.executor_id is not null then 1 else 0 end) accepted,
          max_by(f.current_state, f.created_at) state, max_by(f.reason_code, f.created_at) reason, max_by(f.customer_name, f.created_at) customer_name,
          max_by(f.locality, f.created_at) locality, max_by(f.service_address, f.created_at) addr, max_by(f.confirmed_slot_at, f.created_at) slot_at,
-         max(case when f.current_state = 'CONNECTION_ACTIVE' or f.installation_completed_at is not null then 1 else 0 end) installed
+         max(case when f.current_state = 'CONNECTION_ACTIVE' or f.installation_completed_at is not null then 1 else 0 end) installed,
+         max_by(f.failure_reason, f.created_at) failure_reason, max_by(f.execution_candidate_id, f.created_at) last_ec
        from PROD_DB.DBT_CSP.FACT_INSTALL_CANDIDATES f
        where f.etl_current and f.task_family = 'INSTALL' and convert_timezone('Asia/Kolkata', f.created_at) >= '%(today)s 00:00' and f.csp_id in (select csp_id from csps)
        group by 1, 2),
@@ -58,6 +59,9 @@ enr as (select connection_id, right(regexp_replace(mobile::varchar,'[^0-9]',''),
 tv as (select connection_id, right(regexp_replace(mobile,'[^0-9]',''),10) m10 from (select mobile, connection_id from PROD_DB.DBT.TASKVANILLA union all select mobile, connection_id from PROD_DB.DBT.TASKVANILLA_AUDIT)
        where connection_id in (select connection_id from f0) and mobile is not null qualify row_number() over (partition by connection_id order by m10) = 1),
 fm as (select f0.*, coalesce(enr.m10, tv.m10) m10 from f0 left join enr on enr.connection_id = f0.connection_id left join tv on tv.connection_id = f0.connection_id),
+fd as (select execution_candidate_id ec, failure_detail from PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.INSTALL_EXECUTION_CANDIDATES
+       where execution_candidate_id in (select last_ec from f0) and failure_detail is not null and trim(failure_detail) <> ''
+       qualify row_number() over (partition by execution_candidate_id order by _fivetran_synced desc) = 1),
 calls as (select partner_account_id csp_id, right(regexp_replace(counterparty_number,'[^0-9]',''),10) m10, start_time, role, direction, outcome, coalesce(duration_seconds,0) dur
           from PROD_DB.POSTGRES_RDS_PARTNER_CALL_LOG_IVR.DEVICE_CALL_LOG where start_time >= '%(utc_from)s' and partner_account_id in (select csp_id from csps)),
 agg as (select fm.connection_id, fm.csp_id,
@@ -68,9 +72,9 @@ agg as (select fm.connection_id, fm.csp_id,
         from fm join calls c on c.csp_id = fm.csp_id and c.m10 = fm.m10 and c.start_time >= fm.offered_utc group by 1, 2)
 select fm.m10 mobile, fm.customer_name, fm.locality, fm.addr, fm.csp_id, d.partner_name csp_name, left(fm.connection_id, 8) conn,
   to_char(dateadd(minute, 330, fm.offered_utc),'HH24:MI') offered_ist, fm.offers, fm.accepted, fm.state, fm.reason, fm.installed,
-  to_char(convert_timezone('Asia/Kolkata', fm.slot_at),'DD Mon HH24:MI') slot_ist,
+  to_char(convert_timezone('Asia/Kolkata', fm.slot_at),'DD Mon HH24:MI') slot_ist, fm.failure_reason, fd.failure_detail,
   coalesce(a.n_out,0) n_out, coalesce(a.n_out_conn,0) n_out_conn, coalesce(a.n_in_conn,0) n_in_conn, coalesce(a.max_conn_dur,0) max_conn_dur, a.first_call, a.last_call
-from fm left join agg a on a.connection_id = fm.connection_id and a.csp_id = fm.csp_id
+from fm left join agg a on a.connection_id = fm.connection_id and a.csp_id = fm.csp_id left join fd on fd.ec = fm.last_ec
 left join PROD_DB.DBT_CSP.DIM_CSP d on d.csp_id = fm.csp_id and d.etl_current
 order by fm.offered_utc
 """
@@ -138,8 +142,9 @@ def status(r):
     if r["INSTALLED"]: return "INSTALLED"
     if s == "CANCELLED_BY_UPSTREAM" and r["REASON"] == "TIMEOUT_P41": return "timed out (CSP never accepted)"
     if s == "CANCELLED_BY_UPSTREAM": return "taken back by system"
-    if s == "DECLINED": return "CSP declined: " + rc
-    if s == "INSTALLATION_REPORTED_FAILED": return "visit failed (" + rc + ")"
+    txt = (" - CSP wrote: \"%s\"" % r["FAILURE_DETAIL"].strip()) if r.get("FAILURE_DETAIL") else ""
+    if s == "DECLINED": return "CSP declined: " + ((r.get("FAILURE_REASON") or rc).lower().replace("_", " ")) + txt
+    if s == "INSTALLATION_REPORTED_FAILED": return "CSP accepted, then reported the visit FAILED: " + ((r.get("FAILURE_REASON") or "no code").lower().replace("_", " ")) + txt
     if s == "CANCELLED_BY_CUSTOMER": return "customer cancelled"
     if not r["ACCEPTED"]: return "waiting for CSP to accept"
     return "accepted, " + s.lower().replace("_", " ")
