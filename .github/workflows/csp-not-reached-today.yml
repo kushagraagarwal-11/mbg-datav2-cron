@@ -1,0 +1,27 @@
+name: "Today: CSP tried, cx not reached (every 30 min)"
+
+on:
+  schedule:
+    # every 30 minutes; GitHub may delay a few minutes at busy times
+    - cron: "7,37 * * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: csp-not-reached-today
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - name: Refresh the tab (append new leads, never remove)
+        env:
+          MB_KEY: ${{ secrets.MB_KEY }}
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+        run: python csp_not_reached_today.py
