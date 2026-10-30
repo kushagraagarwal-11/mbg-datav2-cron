@@ -1,0 +1,8 @@
+
+# six_live runtime (pulled every run) and lead-point inputs (kept in the private sheet, never here)
+six_live/*.json
+six_live/stamp.txt
+six_live/out/
+six_live/__pycache__/
+six_live/static/api_points.json
+six_live/static/pockets_leads.json

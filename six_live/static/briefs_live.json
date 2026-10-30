@@ -1,0 +1,95 @@
+{
+ "source": "P1/P2 Winbacks sheet, tab BD Pocket Briefs (rebuilt 14 Sep 2026; leads 1 Aug - 11 Sep 2026)",
+ "window_from": "2026-08-01",
+ "window_to": "2026-09-11",
+ "pockets": {
+  "6374_17171": {
+   "rank": 1,
+   "unrec": 39,
+   "expired": 39,
+   "date": "2026-09-15",
+   "owner": "Vivek Pandey",
+   "suggested": "Sunil Cable",
+   "outcome": "Offered to- Sunil Cable (choice 1) // Also Bottam Cable TV Network",
+   "agree": "",
+   "pincode": "110053"
+  },
+  "6375_17171": {
+   "rank": 2,
+   "unrec": 34,
+   "expired": 31,
+   "date": "2026-09-15",
+   "owner": "Vivek Pandey",
+   "suggested": "Sunil Cable",
+   "outcome": "Offered to - Sunil Cable (choice 1) // Also offered to Stream Broadband // Also Bottam Cable TV Network",
+   "agree": "",
+   "pincode": "110053"
+  },
+  "6344_17176": {
+   "rank": 14,
+   "unrec": 18,
+   "expired": 13,
+   "date": "2026-09-17",
+   "owner": "vivek Pandey",
+   "suggested": "Smart Fiber Net",
+   "outcome": "offered to Colours Net  // also offered to Entertainment Broadband",
+   "agree": "Entertainment Broadband",
+   "pincode": "110025"
+  },
+  "6359_17119": {
+   "rank": 48,
+   "unrec": 10,
+   "expired": 9,
+   "date": "2026-09-18",
+   "owner": "Vivek Pandey",
+   "suggested": "K P INTERNET 1 SERVICES",
+   "outcome": "Offered to daiwik broadband",
+   "agree": "Daiwik Broadband",
+   "pincode": "110059"
+  },
+  "6367_17176": {
+   "rank": 76,
+   "unrec": 8,
+   "expired": 8,
+   "date": "2026-09-15",
+   "owner": "Vivek Pandey",
+   "suggested": "Webcity Broadband",
+   "outcome": "offered to webcity // Also offered to Bhatia Cable TV Network ( choice -3 )",
+   "agree": "Webcity Broadband",
+   "pincode": "110051"
+  },
+  "6367_17175": {
+   "rank": 95,
+   "unrec": 7,
+   "expired": 5,
+   "date": "2026-09-15",
+   "owner": "Vivek Pandey",
+   "suggested": "Webcity Broadband",
+   "outcome": "offered to webcity // Also offered to Bhatia Cable TV Network ( choice -3 )",
+   "agree": "Webcity Broadband",
+   "pincode": "110051"
+  },
+  "6387_17152": {
+   "rank": 107,
+   "unrec": 6,
+   "expired": 5,
+   "date": "2026-09-14",
+   "owner": "Vivek Pandey",
+   "suggested": "Broadband Solution",
+   "outcome": "Offered and Interested - Broadband Solution (choice 1)",
+   "agree": "Broadband Solution",
+   "pincode": "110042"
+  },
+  "6379_17179": {
+   "rank": 118,
+   "unrec": 6,
+   "expired": 5,
+   "date": "2026-09-16",
+   "owner": "Vivek Pandey",
+   "suggested": "SHRI SHYAM JI NETWORK",
+   "outcome": "Offered to Shree Sai Broadband // Also Offered to RAJNI CABLE TV NETWORK // SHRI SHYAM JI NETWORK",
+   "agree": "SHRI SHYAM JI NETWORK",
+   "pincode": "110093"
+  }
+ }
+}
