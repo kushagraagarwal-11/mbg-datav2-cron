@@ -208,13 +208,18 @@ def main():
     for d in existing:
         ids = re.findall(r"\((a0[a-z0-9]{4})\)", d.get("CSP holding the lead", ""))
         key = (d.get("Customer mobile", "") or "") + "|" + (ids[0] if ids else "")
-        d.setdefault("Offer date", d.get("Offer date") or "2026-10-30")
+        # older layout used different header names: carry the values over
+        for a, b in (("Offered today at (IST)", "Offered at (IST)"), ("Offered to CSP (IST)", "Offered at (IST)")):
+            if not d.get(b) and d.get(a): d[b] = d[a]
+        if not d.get("Offer date"): d["Offer date"] = "2026-10-30"
         by_key[key] = d
     added = updated = 0
     for key, t in today_rows.items():
         if key in by_key:
             d = by_key[key]
             for c in DATA: d[c] = t["data"][c]
+            for c in ("Offered at (IST)", "Offer date", "Customer name", "Locality", "Address", "First seen (IST)", "Connection ids"):
+                if not d.get(c): d[c] = t["data"][c]   # fill blanks left by an older layout, never overwrite
             updated += 1
         elif t["qual"]:
             d = {c: "" for c in COLS}; d.update(t["data"]); existing.append(d); by_key[key] = d; added += 1
