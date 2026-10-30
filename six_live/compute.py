@@ -9,6 +9,7 @@ APR = J("appr_points.json")   # pitch-time unrecoverable leads per window, fetch
 briefs = J("static/briefs_live.json")["pockets"]
 import os
 UI = {r["EC"]: r["SEC_UI_AFTER"] for r in J("ui30.json")} if os.path.exists("ui30.json") else {}
+TP = {r["CONN"]: r for r in J("task_points.json")} if os.path.exists("task_points.json") else {}   # TASKVANILLA pin per routed connection
 W = {"a0a7h7": dict(name="Ashu Broadband", pitch="2026-09-14", golive="2026-09-24 18:50", parent="Broadband Solution (a0b9z3)", pockets=["6387_17152"]),
      "a0a7h8": dict(name="BB Internet", pitch="2026-09-15", golive="2026-09-24 18:50", parent="ex Stream Broadband (a0a7b9)", pockets=["6374_17171", "6375_17171"]),
      "a0a7h9": dict(name="Mahadev Cable", pitch="2026-09-18", golive="2026-09-29 19:41", parent="Daiwik Broadband (a0c0b8)", pockets=["6359_17119"]),
@@ -92,6 +93,30 @@ for cid, w in W.items():
         return o
     m["windows"] = [win("baseline", dt.datetime(2026, 8, 1), pitch_end), win("since go-live", gl, NOW), win("L30D", L30, NOW)]
     m["pins"] = [[r["LAT"], r["LNG"], r["BOOKED"][:10], ("new" if (r["CANDS"] or "").split("|")[-1].split(":")[0] == cid else "old") if r["CANDS"] else "nolead", "I" in [c.split(":")[-1] for c in (r["CANDS"] or "").split("|") if c], P(r["BOOKED"]) >= gl, P(r["BOOKED"]) <= pitch_end] for r in rows]
+    # leads routed to him since go-live, all his zones (one row per customer / connection), with the TASKVANILLA pin so they show on the map even outside the atom
+    byc = defaultdict(list)
+    for t in tasks:
+        if t["CSP_ID"] == cid and IST(t["CREATED"]) >= gl: byc[t["CONN"]].append(t)
+    routed = []
+    for conn, ts in byc.items():
+        ts.sort(key=lambda t: t["CREATED"]); last = ts[-1]; p = TP.get(conn)
+        inside = bool(p and inatom(cid, p["LAT"], p["LNG"]))
+        installed = any(t["INST_AT"] or t["ST"] == "CONNECTION_ACTIVE" for t in ts)
+        if installed: out = "installed"
+        elif last["TS"] == "OPEN": out = "open"
+        elif last["ST"] == "DECLINED": out = "declined"
+        elif last["RC"] == "TIMEOUT_P41": out = "timeout"
+        elif last["ST"] == "INSTALLATION_REPORTED_FAILED": out = "failed"
+        elif last["ST"] == "CANCELLED_BY_CUSTOMER": out = "cx_cancel"
+        else: out = "other"
+        routed.append(dict(conn=conn[:8], lat=p["LAT"] if p else None, lng=p["LNG"] if p else None, inside=inside, dist=(0 if inside or not p else round(dist_to_atom(cid, p["LAT"], p["LNG"]))),
+                           offers=len(ts), first=IST(ts[0]["CREATED"]).strftime("%d %b %H:%M"), last=IST(last["CREATED"]).strftime("%d %b %H:%M"), state=last["ST"], out=out,
+                           accepted=any(t["ASG"] for t in ts), mh=p["MH"] if p else None))
+    routed.sort(key=lambda r: r["first"])
+    m["routed"] = routed; rs = Counter(r["out"] for r in routed)
+    m["routed_sum"] = dict(customers=len(routed), offers=sum(r["offers"] for r in routed), inside=sum(1 for r in routed if r["inside"]), outside=sum(1 for r in routed if r["lat"] is not None and not r["inside"]),
+                           nopin=sum(1 for r in routed if r["lat"] is None), accepted=sum(1 for r in routed if r["accepted"]), installed=rs["installed"], open=rs["open"], declined=rs["declined"], timeout=rs["timeout"],
+                           failed=rs["failed"] + rs["cx_cancel"] + rs["other"])
     # funnel on tasks created since go-live (IST)
     T = [t for t in tasks if t["CSP_ID"] == cid and IST(t["CREATED"]) >= gl]
     f = Counter(); lat_open = []; lat_resp = []

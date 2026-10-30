@@ -78,6 +78,12 @@ group by 1,2,3 order by 1,3""", "launches"), io.open("launches.json", "w"))
     json.dump(mb(f"""select csp_id, execution_candidate_id ec, connection_id conn, zone_id, to_char(created_at,'YYYY-MM-DD HH24:MI') created, current_state st, task_status ts, reason_code rc,
   case when executor_id is not null then 1 else 0 end asg, to_char(installation_completed_at,'YYYY-MM-DD HH24:MI') inst_at, to_char(confirmed_slot_at,'YYYY-MM-DD HH24:MI') slot_at, declined_reason, dismiss_count, call_attempts_count calls
 from PROD_DB.DBT_CSP.FACT_INSTALL_CANDIDATES where etl_current and task_family = 'INSTALL' and csp_id in ({IN}) and created_at >= '{SINCE}' order by csp_id, created_at""", "tasks"), io.open("tasks.json", "w"))
+    # 3b pin of every routed lead (TASKVANILLA lat/lng per connection), so his leads show on the map even when they fall outside the atom outline
+    json.dump(mb(f"""with t as (select distinct connection_id from PROD_DB.DBT_CSP.FACT_INSTALL_CANDIDATES where etl_current and task_family = 'INSTALL' and csp_id in ({IN}) and created_at >= '{SINCE}'),
+p as (select connection_id, try_to_double(lat) lat, try_to_double(lng) lng, right(regexp_replace(mobile,'[^0-9]',''),10) m10
+      from (select connection_id, lat, lng, mobile from PROD_DB.DBT.TASKVANILLA union all select connection_id, lat, lng, mobile from PROD_DB.DBT.TASKVANILLA_AUDIT)
+      where connection_id in (select connection_id from t) and lat is not null)
+select connection_id conn, round(max(lat), 6) lat, round(max(lng), 6) lng, md5(max(m10)) mh from p group by 1""", "task_points"), io.open("task_points.json", "w"))
     json.dump(mb(f"""with t as (select execution_candidate_id ec, csp_id from PROD_DB.DBT_CSP.FACT_INSTALL_CANDIDATES where etl_current = true and task_family = 'INSTALL' and csp_id in ({IN}) and created_at >= '{SINCE}')
 select t.csp_id, t.ec,
  to_char(min(case when l.to_state='AWAITING_CSP_ACCEPTANCE' then l.occurred_at end),'YYYY-MM-DD HH24:MI:SS') hold_at,
