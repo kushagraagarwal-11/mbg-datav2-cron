@@ -16,7 +16,8 @@ W = {"a0a7h7": dict(name="Ashu Broadband", pitch="2026-09-14", golive="2026-09-2
      "a0a6z8": dict(name="Webcity Broadband (expansion)", pitch="2026-09-15", golive="2026-09-29 19:51", parent="same CSP, 2 new pockets", pockets=["6367_17176", "6367_17175"]),
      "a0a7i4": dict(name="Google Broadband", pitch="2026-09-17", golive="2026-10-21 12:24", parent="Entertainment Broadband (a0b6h4)", pockets=["6344_17176"]),
      "a0a7i8": dict(name="AS Internet Service 2", pitch="2026-10-12", golive="2026-10-23 15:20", parent="AS Internet Services (a0b9i3)", pockets=["6332_17182"]),
-     "a0a7i6": dict(name="Pavika Broadband", pitch="2026-10-22", golive="2026-10-23 13:24", parent="Daiwik Broadband (a0c0b8), 2nd window", pockets=[])}
+     "a0a7i6": dict(name="Pavika Broadband", pitch="2026-10-22", golive="2026-10-23 13:24", parent="Daiwik Broadband (a0c0b8), 2nd window", pockets=[]),
+     "a0a7i3": dict(name="Aeronet Solutions", pitch="2026-09-16", golive="2026-10-12 13:27", parent="SHRI SHYAM JI NETWORK (a0b6t9), new window", pockets=["6379_17179"])}
 NOW = dt.datetime.strptime(io.open("stamp.txt").read().strip(), "%d %b %Y %H:%M"); L30 = (NOW - dt.timedelta(days=30)).replace(hour=0, minute=0)
 P = lambda s: dt.datetime.strptime(s[:16], "%Y-%m-%d %H:%M")
 IST = lambda s: P(s) + dt.timedelta(hours=5, minutes=30)      # FACT / TAS timestamps print in UTC

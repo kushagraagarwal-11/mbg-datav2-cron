@@ -14,8 +14,8 @@ HERE = os.path.dirname(os.path.abspath(__file__)); os.chdir(HERE)
 MB_URL = "https://metabase.wiom.in/api/dataset"; MB_KEY = os.environ.get("MB_KEY", ""); DB_ID = 113
 if not MB_KEY: sys.exit("MB_KEY not set")
 IST = timezone(timedelta(hours=5, minutes=30)); NOW = datetime.now(IST)
-CSPS = ["a0a7h7", "a0a7h8", "a0a7h9", "a0a6z8", "a0a7i4", "a0a7i6", "a0a7i8"]
-PIDS = {"a0a7i4": "281749855443180", "a0a7i8": "281749855453790", "a0a7h8": "281749855368355", "a0a7i6": "281749855453756"}   # DIM_CSP partner ids of the new windows (fallback join)
+CSPS = ["a0a7h7", "a0a7h8", "a0a7h9", "a0a6z8", "a0a7i4", "a0a7i6", "a0a7i8", "a0a7i3"]
+PIDS = {"a0a7i4": "281749855443180", "a0a7i8": "281749855453790", "a0a7h8": "281749855368355", "a0a7i6": "281749855453756", "a0a7i3": "281749855405613"}   # DIM_CSP partner ids of the new windows (fallback join)
 IN = ",".join("'%s'" % c for c in CSPS)
 SINCE = "2026-09-20"   # first lead of the first window was 24 Sep
 
@@ -131,15 +131,19 @@ select t.csp_id, t.ec,
 from t left join PROD_DB.CSP_TAS_SERVICE_CSP_TAS_SERVICE.INSTALL_STATE_TRANSITION_LOG l on l.execution_candidate_id = t.ec
 group by 1, 2""", "tas"), io.open("tas.json", "w"))
     # 5 bookings in each atom bbox (paid) + 6 every attempt (unpaid count)
-    bk_head = f"""with bk0 as (
+    def bk_head_for(cases): return f"""with bk0 as (
   select mobile::varchar mobile, added_time::timestamp_ntz added_time, try_to_double(lat::varchar) lat, try_to_double(lng::varchar) lng, 0 src, booking_state, status, payment_status
   from PROD_DB.BOOKING_SERVICE_JAVA_PUBLIC.BOOKING where _fivetran_active and lat is not null and added_time >= '2026-08-01'
   union all
   select mobile::varchar, added_time::timestamp_ntz, try_to_double(lat::varchar), try_to_double(lng::varchar), 1, booking_state, status, payment_status
   from PROD_DB.DYNAMODB_READ.BOOKING where lat is not null and added_time >= '2026-08-01'),
-bk as (select *, right(regexp_replace(mobile,'[^0-9]',''),10) m10, case {atom_case} end atom
+bk as (select *, right(regexp_replace(mobile,'[^0-9]',''),10) m10, case {cases} end atom
   from bk0 qualify row_number() over (partition by mobile, date_trunc('hour', added_time) order by src) = 1),"""
-    json.dump(mb(bk_head + """
+    # pulled per window (one bbox each): the combined pull crossed the 2,000-row cap when the 8th window was added on 2 Nov
+    bk_rows, bka_rows = [], []
+    for _cid, _g in geo.items():
+        _one = "when lat between %s and %s and lng between %s and %s then '%s'" % (_g["bbox"][0], _g["bbox"][1], _g["bbox"][2], _g["bbox"][3], _cid)
+        bk_rows += mb(bk_head_for(_one) + """
 bx as (select * from bk where atom is not null and (coalesce(payment_status, 0) <> 0 or booking_state is not null)),
 enr as (select connection_id, right(regexp_replace(mobile::varchar,'[^0-9]',''),10) m10, booking_confirm_time::timestamp_ntz bct from PROD_DB.PUBLIC.COMPANY_B_CONNECTION_BOOKING_ENRICHED qualify row_number() over (partition by connection_id order by run_date desc) = 1),
 m1 as (select bx.mobile, bx.added_time, e.connection_id, row_number() over (partition by bx.mobile, bx.added_time order by abs(datediff('second', bx.added_time, e.bct))) rn
@@ -152,14 +156,15 @@ m2 as (select bx.mobile, bx.added_time, tv.connection_id, row_number() over (par
 j as (select bx.*, coalesce(a.connection_id, b.connection_id) connection_id, case when a.connection_id is not null then 'enr' when b.connection_id is not null then 'tv' end link
       from bx left join m1 a on a.mobile = bx.mobile and a.added_time = bx.added_time and a.rn = 1 left join m2 b on b.mobile = bx.mobile and b.added_time = bx.added_time and b.rn = 1)
 select j.atom, to_char(j.added_time,'YYYY-MM-DD HH24:MI') booked, round(j.lat,6) lat, round(j.lng,6) lng, j.src, j.connection_id conn, j.link, c.cands, md5(j.mobile) mh, j.booking_state bst, j.status st, j.payment_status pst
-from j left join fc c on c.connection_id = j.connection_id order by 1, 2""", "bookings"), io.open("bookings.json", "w"))
-    json.dump(mb(bk_head + """
+from j left join fc c on c.connection_id = j.connection_id order by 1, 2""", "bookings " + _cid)
+        bka_rows += mb(bk_head_for(_one) + """
 bx as (select * from bk where atom is not null),
 enr as (select connection_id, mobile::varchar mobile, booking_confirm_time::timestamp_ntz bct from PROD_DB.PUBLIC.COMPANY_B_CONNECTION_BOOKING_ENRICHED qualify row_number() over (partition by connection_id order by run_date desc) = 1),
 m as (select bx.*, e.connection_id, e.bct, row_number() over (partition by bx.mobile, bx.added_time order by abs(datediff('second', bx.added_time, e.bct))) rn
       from bx left join enr e on e.mobile = bx.mobile and abs(datediff('hour', bx.added_time, e.bct)) <= 96)
 select m.atom, to_char(m.added_time,'YYYY-MM-DD HH24:MI') booked, round(m.lat,6) lat, round(m.lng,6) lng, m.src, m.connection_id conn, to_char(m.bct,'YYYY-MM-DD HH24:MI') confirm, null as cands, md5(m.mobile) mh, m.booking_state bst, m.status st, m.payment_status pst
-from m where m.rn = 1 order by m.atom, m.added_time""", "bookings_all"), io.open("bookings_all.json", "w"))
+from m where m.rn = 1 order by m.atom, m.added_time""", "bookings_all " + _cid)
+    json.dump(bk_rows, io.open("bookings.json", "w")); json.dump(bka_rows, io.open("bookings_all.json", "w"))
     # 7 CleverTap task events per execution candidate (role '' = owner/manager device, 'technician' = technician device)
     json.dump(mb(f"""with t as (select execution_candidate_id ec, csp_id from PROD_DB.DBT_CSP.FACT_INSTALL_CANDIDATES where etl_current = true and task_family = 'INSTALL' and csp_id in ({IN}) and created_at >= '{SINCE}'),
 pr as (select clevertap_id, cspid, case when lower(role) = 'technician' then 'technician' else '' end role from PROD_DB.CLEVERTAP_CSP_API.PROFILE_DATA where cspid in ({IN}) and not _fivetran_deleted)
