@@ -98,7 +98,7 @@ def stock_check(cid):
     parts = [("%d Netbox in hand" % free) if free else "no Netbox in hand"]
     if pend:
         c = (s.get("COURIER") or ""); disp = s.get("LAST_DISPATCHED") or s.get("LAST_ORDER") or ""
-        if c.lower().startswith("delivered"): parts.append("%d more %s by courier but he has not marked them received in the app, so they do not count yet" % (pend, c.lower()))
+        if c.lower().startswith("delivered"): parts.append("%d more delivered by courier%s but he has not marked them received in the app, so they do not count yet" % (pend, (" on " + c.split(" ", 1)[1]) if " " in c else ""))
         elif c: parts.append("%d more dispatched %s, courier says %s" % (pend, disp, c))
         else: parts.append("%d more dispatched %s, not yet marked received in the app" % (pend, disp))
     elif oq: parts.append("order of %d %s %s" % (oq, (s.get("OPEN_STATUS") or "open").lower(), s.get("LAST_ORDER") or ""))
