@@ -91,13 +91,14 @@ _sk = {}
 try: _sk = {r["CSP_ID"]: r for r in json.load(io.open("stock.json", encoding="utf-8"))}
 except Exception: _sk = {}
 def stock_check(cid):
-    """Column 8: free Netbox (IDLE + CUSTODIED, ONT or Router) with the CSP per the inventory model, plus what is on the way."""
+    """Column 8: free Netbox (IDLE + CUSTODIED) with the CSP per NETBOX_CUSTODY, the live custody table behind the CSP app, plus what is on the way."""
     s = _sk.get(cid)
     if not s: return ("weak", "no inventory data")
     free = (s.get("FREE_ONT") or 0) + (s.get("FREE_ROUTER") or 0); pend = s.get("PENDING") or 0; oq = s.get("OPEN_QTY") or 0
     note = ("%d Netbox in hand" % free) if free else "none in hand"
-    if pend: note += ", %d delivered but receipt not confirmed in the app" % pend
+    if pend: note += ", %d in transit / awaiting his receipt confirmation in the app" % pend
     if oq: note += ", order of %d %s%s" % (oq, (s.get("OPEN_STATUS") or "open").lower(), (" " + s["LAST_ORDER"]) if s.get("LAST_ORDER") else "")
+    if s.get("DEPLOYED"): note += "; %d deployed at customers" % s["DEPLOYED"]
     if s.get("LAST_RECEIVED"): note += "; last delivery confirmed %s" % s["LAST_RECEIVED"]
     st = "ok" if free >= 5 else ("weak" if (free or pend or oq) else "fail")
     return (st, note)
@@ -112,7 +113,7 @@ for cid in ORDER:
         cid, esc(m["name"]), cid, tick(cov_state, "%s%% covered" % cov), tick(*c["spl"]), tick(*c["genie"]), tick(*c["expo"]), tick(*c["enf"]), tick(*c["route"]), tick(*c["leads"]), tick(*stock_check(cid)), c["verdict"][0], esc(c["verdict"][1])))
 CHK_HTML = ('<section class="card"><h2>Go-live checklist</h2><div class="tw"><table id="chk"><tr><th>CSP</th>'
     '<th>1 Atom coverage<br><span class="mut">share of the atom within 50 m of his points</span></th><th>2 Splitter mapping uploaded</th><th>3 Genie</th>'
-    '<th>4 Exposure<br><span class="mut">zone data set open</span></th><th>5 Enforcement</th><th>6 Routing sees it</th><th>7 Leads arrived</th><th>8 Routers in stock<br><span class="mut">free Netbox with the CSP (inventory model)</span></th><th>Verdict</th></tr>'
+    '<th>4 Exposure<br><span class="mut">zone data set open</span></th><th>5 Enforcement</th><th>6 Routing sees it</th><th>7 Leads arrived</th><th>8 Routers in stock<br><span class="mut">free Netbox with the CSP (live NetBox custody table)</span></th><th>Verdict</th></tr>'
     + "".join(chk_rows) + '</table></div>'
     '<p class="mut">Tick = passes; amber tick = passes but weak (reduced exposure, pattern watch, thin or non-converting leads); cross = fails. Atom coverage ticks at 50% or more. Routers in stock ticks at 5 or more free Netbox with the CSP, amber below 5 or when stock is only on the way, cross when none and nothing ordered. Routing, leads and stock refresh with the page; splitter, Genie, exposure and enforcement states are from the go-live health checks of 29 Oct.</p></section>')
 

@@ -158,20 +158,19 @@ group by 1, 2""", "ui30"), io.open("ui30.json", "w"))
 from (select column1 csp_id from values {",".join("('%s')" % c for c in CSPS)}) c
 left join PROD_DB.CSP_DEMAND_ALLOCATION_SERVICE_CSP_DEMAND_ALLOCATION_SERVICE.ALLOCATION_AUDIT_LOG a on a.created_at >= '{SINCE}' and (a.candidate_csps_received ilike '%' || c.csp_id || '%' or a.selected_csp_id = c.csp_id)
 group by 1""", "routing"), io.open("routing.json", "w"))
-    # 10 stock: free Netbox (ONT / Router) with the CSP per the inventory model + device orders (for checklist column 8)
+    # 10 stock: free Netbox with the CSP per the live NetBox custody table (what the CSP app shows) + device orders (for checklist column 8)
     json.dump(mb(f"""with c as (select column1 csp_id from values {",".join("('%s')" % c for c in CSPS)}),
-acct as (select csp_id, partner_id::varchar pid from PROD_DB.CSP_GATEWAY_SERVICE_CSP_GATEWAY_SERVICE.CSP_ACCOUNT where _fivetran_active and csp_id in ({IN})),
-inv as (select partner_account_id::varchar pid,
-  count_if(status in ('IDLE','CUSTODIED') and device_type = 'ONT') free_ont, count_if(status in ('IDLE','CUSTODIED') and device_type = 'Router') free_router,
-  count_if(status = 'PENDING_CSP_RECEIPT') pending, count_if(status = 'WRITTEN_OFF') written_off
-  from PROD_DB.PUBLIC.INVENTORY_MODEL where current_location = 'partner' and coalesce(device_type,'') <> 'Invalid' and device_id not like 'PNM%' and partner_account_id::varchar in (select pid from acct) group by 1),
+inv as (select csp_id pid,
+  count_if(status in ('IDLE','CUSTODIED') and device_type = 'ONT') free_ont, count_if(status in ('IDLE','CUSTODIED') and device_type <> 'ONT') free_router,
+  count_if(status = 'PENDING_CSP_RECEIPT') pending, count_if(status = 'WRITTEN_OFF') written_off, count_if(status = 'DEPLOYED') deployed
+  from PROD_DB.CSP_ASSET_CUSTODY_SERVICE_CSP_ASSET_CUSTODY_SERVICE.NETBOX_CUSTODY where _fivetran_active and csp_id in ({IN}) group by 1),
 ord as (select csp_id, count(*) open_orders, sum(quantity_approved) open_qty, max(status) open_status, to_char(convert_timezone('Asia/Kolkata', max(created_at)),'DD Mon') last_order
   from PROD_DB.CSP_ASSET_CUSTODY_SERVICE_CSP_ASSET_CUSTODY_SERVICE.DEVICE_ORDERS where _fivetran_active and csp_id in ({IN}) and status not in ('FULFILLED','REJECTED','EXPIRED','CANCELLED') group by 1),
 rec as (select csp_id, sum(quantity_approved) received_qty, to_char(convert_timezone('Asia/Kolkata', max(updated_at)),'DD Mon') last_received
   from PROD_DB.CSP_ASSET_CUSTODY_SERVICE_CSP_ASSET_CUSTODY_SERVICE.DEVICE_ORDERS where _fivetran_active and csp_id in ({IN}) and status = 'FULFILLED' group by 1)
-select c.csp_id, coalesce(i.free_ont, 0) free_ont, coalesce(i.free_router, 0) free_router, coalesce(i.pending, 0) pending, coalesce(i.written_off, 0) written_off,
+select c.csp_id, coalesce(i.free_ont, 0) free_ont, coalesce(i.free_router, 0) free_router, coalesce(i.pending, 0) pending, coalesce(i.written_off, 0) written_off, coalesce(i.deployed, 0) deployed,
   coalesce(o.open_orders, 0) open_orders, coalesce(o.open_qty, 0) open_qty, o.open_status, o.last_order, coalesce(r.received_qty, 0) received_qty, r.last_received
-from c left join acct on acct.csp_id = c.csp_id left join inv i on i.pid = acct.pid left join ord o on o.csp_id = c.csp_id left join rec r on r.csp_id = c.csp_id""", "stock"), io.open("stock.json", "w"))
+from c left join inv i on i.pid = c.csp_id left join ord o on o.csp_id = c.csp_id left join rec r on r.csp_id = c.csp_id""", "stock"), io.open("stock.json", "w"))
     stamp = NOW.strftime("%d %b %Y %H:%M")
     io.open("stamp.txt", "w").write(stamp)
     for step in ("compute.py", "build_page.py"):
