@@ -87,6 +87,20 @@ for _c in CHECK:
     if not conns: ls = "fail"
     elif ls == "fail": ls = "weak"
     CHECK[_c]["leads"] = (ls, "%d leads, %d installs since 20 Sep" % (len(conns), len(inst)))
+_sk = {}
+try: _sk = {r["CSP_ID"]: r for r in json.load(io.open("stock.json", encoding="utf-8"))}
+except Exception: _sk = {}
+def stock_check(cid):
+    """Column 8: free Netbox (IDLE + CUSTODIED, ONT or Router) with the CSP per the inventory model, plus what is on the way."""
+    s = _sk.get(cid)
+    if not s: return ("weak", "no inventory data")
+    free = (s.get("FREE_ONT") or 0) + (s.get("FREE_ROUTER") or 0); pend = s.get("PENDING") or 0; oq = s.get("OPEN_QTY") or 0
+    note = ("%d Netbox in hand" % free) if free else "none in hand"
+    if pend: note += ", %d delivered but receipt not confirmed in the app" % pend
+    if oq: note += ", order of %d %s%s" % (oq, (s.get("OPEN_STATUS") or "open").lower(), (" " + s["LAST_ORDER"]) if s.get("LAST_ORDER") else "")
+    if s.get("LAST_RECEIVED"): note += "; last delivery confirmed %s" % s["LAST_RECEIVED"]
+    st = "ok" if free >= 5 else ("weak" if (free or pend or oq) else "fail")
+    return (st, note)
 def tick(state, note=""):
     g = {"ok": "&#10003;", "weak": "&#10003;", "fail": "&#10007;"}[state]
     return '<span class="ck %s">%s</span>' % (state, g) + ('<br><span class="mut">%s</span>' % esc(note) if note else "")
@@ -94,13 +108,13 @@ chk_rows = []
 for cid in ORDER:
     m = M[cid]; c = CHECK[cid]; cov = m["cov_pct"]
     cov_state = "ok" if cov >= 50 else "fail"
-    chk_rows.append('<tr><td><a href="#c_%s"><b>%s</b></a><br><span class="mut">%s</span></td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td><span class="vd %s">%s</span></td></tr>' % (
-        cid, esc(m["name"]), cid, tick(cov_state, "%s%% covered" % cov), tick(*c["spl"]), tick(*c["genie"]), tick(*c["expo"]), tick(*c["enf"]), tick(*c["route"]), tick(*c["leads"]), c["verdict"][0], esc(c["verdict"][1])))
+    chk_rows.append('<tr><td><a href="#c_%s"><b>%s</b></a><br><span class="mut">%s</span></td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td><span class="vd %s">%s</span></td></tr>' % (
+        cid, esc(m["name"]), cid, tick(cov_state, "%s%% covered" % cov), tick(*c["spl"]), tick(*c["genie"]), tick(*c["expo"]), tick(*c["enf"]), tick(*c["route"]), tick(*c["leads"]), tick(*stock_check(cid)), c["verdict"][0], esc(c["verdict"][1])))
 CHK_HTML = ('<section class="card"><h2>Go-live checklist</h2><div class="tw"><table id="chk"><tr><th>CSP</th>'
     '<th>1 Atom coverage<br><span class="mut">share of the atom within 50 m of his points</span></th><th>2 Splitter mapping uploaded</th><th>3 Genie</th>'
-    '<th>4 Exposure<br><span class="mut">zone data set open</span></th><th>5 Enforcement</th><th>6 Routing sees it</th><th>7 Leads arrived</th><th>Verdict</th></tr>'
+    '<th>4 Exposure<br><span class="mut">zone data set open</span></th><th>5 Enforcement</th><th>6 Routing sees it</th><th>7 Leads arrived</th><th>8 Routers in stock<br><span class="mut">free Netbox with the CSP (inventory model)</span></th><th>Verdict</th></tr>'
     + "".join(chk_rows) + '</table></div>'
-    '<p class="mut">Tick = passes; amber tick = passes but weak (reduced exposure, pattern watch, thin or non-converting leads); cross = fails. Atom coverage ticks at 50% or more. Routing and leads counts refresh with the page; splitter, Genie, exposure and enforcement states are from the go-live health checks of 29 Oct.</p></section>')
+    '<p class="mut">Tick = passes; amber tick = passes but weak (reduced exposure, pattern watch, thin or non-converting leads); cross = fails. Atom coverage ticks at 50% or more. Routers in stock ticks at 5 or more free Netbox with the CSP, amber below 5 or when stock is only on the way, cross when none and nothing ordered. Routing, leads and stock refresh with the page; splitter, Genie, exposure and enforcement states are from the go-live health checks of 29 Oct.</p></section>')
 
 html = f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Seven live CSPs - atom, splitters, bookings, task funnel</title>
