@@ -49,6 +49,32 @@ def appr_points():
     json.dump(out, io.open("appr_points.json", "w")); print("  appr_points   %5d rows" % sum(len(v["pts"]) for v in out.values()))
 
 
+DISPATCH_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSwYnbFT8HzwkFZQR1DuERtmuNbeI1fBOqihf_9OJigB7-RwKzyvUUTi66Q3wUxfwcU6EfVHWK3HMGN/pub?gid=0&single=true&output=csv"
+
+
+def courier_status(stock):
+    """Public dispatch tracker (published sheet): per open order ref -> courier delivery status + date, so 'in transit' can be told from 'delivered, not confirmed'."""
+    import csv
+    try:
+        r = requests.get(DISPATCH_CSV, timeout=60); r.raise_for_status()
+        rows = list(csv.DictReader(io.StringIO(r.content.decode("utf-8", "replace"))))
+    except Exception as e:
+        print("  dispatch tracker unavailable:", str(e)[:120]); return
+    by = {}
+    for row in rows:
+        ref = (row.get("Service Portal Request_ID") or "").strip().rstrip(".")
+        if ref: by[ref] = (row.get("Delivery Status") or "").strip(), (row.get("Delivered Date") or "").strip()
+    def nice(d):
+        for f in ("%m/%d/%Y", "%d-%b-%Y", "%d-%m-%Y"):
+            try: return datetime.strptime(d, f).strftime("%d %b").lstrip("0")
+            except ValueError: pass
+        return d
+    for st in stock:
+        hits = [by[x] for x in (st.get("OPEN_REFS") or "").split(",") if x in by]
+        st["COURIER"] = "; ".join(("%s %s" % (h[0], nice(h[1]))).strip() for h in hits) if hits else None
+    print("  courier        %5d of %d open-order refs matched" % (sum(1 for st in stock if st.get("COURIER")), sum(1 for st in stock if st.get("OPEN_REFS"))))
+
+
 def main():
     appr_points()
     geo = json.load(io.open("static/geo.json", encoding="utf-8"))
@@ -159,18 +185,19 @@ from (select column1 csp_id from values {",".join("('%s')" % c for c in CSPS)}) 
 left join PROD_DB.CSP_DEMAND_ALLOCATION_SERVICE_CSP_DEMAND_ALLOCATION_SERVICE.ALLOCATION_AUDIT_LOG a on a.created_at >= '{SINCE}' and (a.candidate_csps_received ilike '%' || c.csp_id || '%' or a.selected_csp_id = c.csp_id)
 group by 1""", "routing"), io.open("routing.json", "w"))
     # 10 stock: free Netbox with the CSP per the live NetBox custody table (what the CSP app shows) + device orders (for checklist column 8)
-    json.dump(mb(f"""with c as (select column1 csp_id from values {",".join("('%s')" % c for c in CSPS)}),
+    stock = mb(f"""with c as (select column1 csp_id from values {",".join("('%s')" % c for c in CSPS)}),
 inv as (select csp_id pid,
   count_if(status in ('IDLE','CUSTODIED') and device_type = 'ONT') free_ont, count_if(status in ('IDLE','CUSTODIED') and device_type <> 'ONT') free_router,
   count_if(status = 'PENDING_CSP_RECEIPT') pending, count_if(status = 'WRITTEN_OFF') written_off, count_if(status = 'DEPLOYED') deployed
   from PROD_DB.CSP_ASSET_CUSTODY_SERVICE_CSP_ASSET_CUSTODY_SERVICE.NETBOX_CUSTODY where _fivetran_active and csp_id in ({IN}) group by 1),
-ord as (select csp_id, count(*) open_orders, sum(quantity_approved) open_qty, max(status) open_status, to_char(convert_timezone('Asia/Kolkata', max(created_at)),'DD Mon') last_order
+ord as (select csp_id, count(*) open_orders, sum(quantity_approved) open_qty, max(status) open_status, to_char(convert_timezone('Asia/Kolkata', max(created_at)),'DD Mon') last_order, to_char(convert_timezone('Asia/Kolkata', max(dispatched_at)),'DD Mon') last_dispatched, listagg(dispatch_ref, ',') open_refs
   from PROD_DB.CSP_ASSET_CUSTODY_SERVICE_CSP_ASSET_CUSTODY_SERVICE.DEVICE_ORDERS where _fivetran_active and csp_id in ({IN}) and status not in ('FULFILLED','REJECTED','EXPIRED','CANCELLED') group by 1),
 rec as (select csp_id, sum(quantity_approved) received_qty, to_char(convert_timezone('Asia/Kolkata', max(updated_at)),'DD Mon') last_received
   from PROD_DB.CSP_ASSET_CUSTODY_SERVICE_CSP_ASSET_CUSTODY_SERVICE.DEVICE_ORDERS where _fivetran_active and csp_id in ({IN}) and status = 'FULFILLED' group by 1)
 select c.csp_id, coalesce(i.free_ont, 0) free_ont, coalesce(i.free_router, 0) free_router, coalesce(i.pending, 0) pending, coalesce(i.written_off, 0) written_off, coalesce(i.deployed, 0) deployed,
-  coalesce(o.open_orders, 0) open_orders, coalesce(o.open_qty, 0) open_qty, o.open_status, o.last_order, coalesce(r.received_qty, 0) received_qty, r.last_received
-from c left join inv i on i.pid = c.csp_id left join ord o on o.csp_id = c.csp_id left join rec r on r.csp_id = c.csp_id""", "stock"), io.open("stock.json", "w"))
+  coalesce(o.open_orders, 0) open_orders, coalesce(o.open_qty, 0) open_qty, o.open_status, o.last_order, o.last_dispatched, o.open_refs, coalesce(r.received_qty, 0) received_qty, r.last_received
+from c left join inv i on i.pid = c.csp_id left join ord o on o.csp_id = c.csp_id left join rec r on r.csp_id = c.csp_id""", "stock")
+    courier_status(stock); json.dump(stock, io.open("stock.json", "w"))
     stamp = NOW.strftime("%d %b %Y %H:%M")
     io.open("stamp.txt", "w").write(stamp)
     for step in ("compute.py", "build_page.py"):

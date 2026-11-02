@@ -91,17 +91,21 @@ _sk = {}
 try: _sk = {r["CSP_ID"]: r for r in json.load(io.open("stock.json", encoding="utf-8"))}
 except Exception: _sk = {}
 def stock_check(cid):
-    """Column 8: free Netbox (IDLE + CUSTODIED) with the CSP per NETBOX_CUSTODY, the live custody table behind the CSP app, plus what is on the way."""
+    """Column 8: free Netbox (IDLE + CUSTODIED) with the CSP per NETBOX_CUSTODY, the live custody table behind the CSP app, plus what is on the way (courier status from the dispatch tracker)."""
     s = _sk.get(cid)
     if not s: return ("weak", "no inventory data")
     free = (s.get("FREE_ONT") or 0) + (s.get("FREE_ROUTER") or 0); pend = s.get("PENDING") or 0; oq = s.get("OPEN_QTY") or 0
-    note = ("%d Netbox in hand" % free) if free else "none in hand"
-    if pend: note += ", %d in transit / awaiting his receipt confirmation in the app" % pend
-    if oq: note += ", order of %d %s%s" % (oq, (s.get("OPEN_STATUS") or "open").lower(), (" " + s["LAST_ORDER"]) if s.get("LAST_ORDER") else "")
-    if s.get("DEPLOYED"): note += "; %d deployed at customers" % s["DEPLOYED"]
-    if s.get("LAST_RECEIVED"): note += "; last delivery confirmed %s" % s["LAST_RECEIVED"]
+    parts = [("%d Netbox in hand" % free) if free else "no Netbox in hand"]
+    if pend:
+        c = (s.get("COURIER") or ""); disp = s.get("LAST_DISPATCHED") or s.get("LAST_ORDER") or ""
+        if c.lower().startswith("delivered"): parts.append("%d more %s by courier but he has not marked them received in the app, so they do not count yet" % (pend, c.lower()))
+        elif c: parts.append("%d more dispatched %s, courier says %s" % (pend, disp, c))
+        else: parts.append("%d more dispatched %s, not yet marked received in the app" % (pend, disp))
+    elif oq: parts.append("order of %d %s %s" % (oq, (s.get("OPEN_STATUS") or "open").lower(), s.get("LAST_ORDER") or ""))
+    if s.get("DEPLOYED"): parts.append("%d deployed at customers" % s["DEPLOYED"])
+    if s.get("LAST_RECEIVED") and not pend: parts.append("last delivery confirmed %s" % s["LAST_RECEIVED"])
     st = "ok" if free >= 5 else ("weak" if (free or pend or oq) else "fail")
-    return (st, note)
+    return (st, "; ".join(parts))
 def tick(state, note=""):
     g = {"ok": "&#10003;", "weak": "&#10003;", "fail": "&#10007;"}[state]
     return '<span class="ck %s">%s</span>' % (state, g) + ('<br><span class="mut">%s</span>' % esc(note) if note else "")
