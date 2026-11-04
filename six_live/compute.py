@@ -17,7 +17,8 @@ W = {"a0a7h7": dict(name="Ashu Broadband", pitch="2026-09-14", golive="2026-09-2
      "a0a7i4": dict(name="Google Broadband", pitch="2026-09-17", golive="2026-10-21 12:24", parent="Entertainment Broadband (a0b6h4)", pockets=["6344_17176"]),
      "a0a7i8": dict(name="AS Internet Service 2", pitch="2026-10-12", golive="2026-10-23 15:20", parent="AS Internet Services (a0b9i3)", pockets=["6332_17182"]),
      "a0a7i6": dict(name="Pavika Broadband", pitch="2026-10-22", golive="2026-10-23 13:24", parent="Daiwik Broadband (a0c0b8), 2nd window", pockets=[]),
-     "a0a7i3": dict(name="Aeronet Solutions", pitch="2026-09-16", golive="2026-10-12 13:27", parent="SHRI SHYAM JI NETWORK (a0b6t9), new window", pockets=["6379_17179"])}
+     "a0a7i3": dict(name="Aeronet Solutions", pitch="2026-09-16", golive="2026-10-12 13:27", parent="SHRI SHYAM JI NETWORK (a0b6t9), new window", pockets=["6379_17179"]),
+     "a0a7j3": dict(name="GEE Broadband", pitch="2026-10-31", golive="2026-11-03 17:02", parent="Vinit Broadband (a0b9p5), new window (Suraj Kumar)", pockets=[])}   # pitch = the day the window was confirmed and handed to onboarding (strategy sheet); go-live = zone authorisation
 NOW = dt.datetime.strptime(io.open("stamp.txt").read().strip(), "%d %b %Y %H:%M"); L30 = (NOW - dt.timedelta(days=30)).replace(hour=0, minute=0)
 P = lambda s: dt.datetime.strptime(s[:16], "%Y-%m-%d %H:%M")
 IST = lambda s: P(s) + dt.timedelta(hours=5, minutes=30)      # FACT / TAS timestamps print in UTC
@@ -67,6 +68,7 @@ for cid, w in W.items():
     # unrecoverable leads in the atom when we approached him (1 Aug - 14 Sep): tracker lead map (in_pocket, period before, status unrec); AS2 is not in the tracker -> BD pocket map leads
     ap = [list(p) for p in APR.get(cid, {}).get("pts", [])]
     if APR.get(cid, {}).get("src") == "tracker": m["appr_src"] = "tracker lead map (Shreyansh), unrecoverable leads inside the outline before go-live"
+    elif APR.get(cid, {}).get("src") == "onepager": m["appr_src"] = "the leads on Shreyansh's 'area to be covered' page for this window, the list he was pitched with"
     elif w["pockets"]: m["appr_src"] = "BD pocket map (14 Sep brief), unrecoverable leads of the pocket cell"
     else: m["appr_src"] = "no pocket cell is tied to this window (area from Shreyansh's page), so no pitch-time lead list"
     for x in ap: x.append(any(hav(x[0], x[1], p[0], p[1]) <= 50 for p in pts))   # now within 50 m of one of his points

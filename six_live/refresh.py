@@ -14,8 +14,8 @@ HERE = os.path.dirname(os.path.abspath(__file__)); os.chdir(HERE)
 MB_URL = "https://metabase.wiom.in/api/dataset"; MB_KEY = os.environ.get("MB_KEY", ""); DB_ID = 113
 if not MB_KEY: sys.exit("MB_KEY not set")
 IST = timezone(timedelta(hours=5, minutes=30)); NOW = datetime.now(IST)
-CSPS = ["a0a7h7", "a0a7h8", "a0a7h9", "a0a6z8", "a0a7i4", "a0a7i6", "a0a7i8", "a0a7i3"]
-PIDS = {"a0a7i4": "281749855443180", "a0a7i8": "281749855453790", "a0a7h8": "281749855368355", "a0a7i6": "281749855453756", "a0a7i3": "281749855405613"}   # DIM_CSP partner ids of the new windows (fallback join)
+CSPS = ["a0a7h7", "a0a7h8", "a0a7h9", "a0a6z8", "a0a7i4", "a0a7i6", "a0a7i8", "a0a7i3", "a0a7j3"]
+PIDS = {"a0a7i4": "281749855443180", "a0a7i8": "281749855453790", "a0a7h8": "281749855368355", "a0a7i6": "281749855453756", "a0a7i3": "281749855405613", "a0a7j3": "281749855502932"}   # DIM_CSP partner ids of the new windows (fallback join)
 IN = ",".join("'%s'" % c for c in CSPS)
 SINCE = "2026-09-20"   # first lead of the first window was 24 Sep
 
