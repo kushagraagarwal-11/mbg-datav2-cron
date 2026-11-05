@@ -4,6 +4,8 @@ from collections import Counter, defaultdict
 J = lambda n: json.load(io.open(n, encoding="utf-8"))
 geo, spl, tasks, ev, tas, la, bk = J("static/geo.json"), J("splitters.json"), J("tasks.json"), J("events.json"), J("tas.json"), J("launches.json"), J("bookings.json")
 bka = J("bookings_all.json")   # every booking attempt, for the unpaid count
+try: GEN = J("genie.json")   # splitters per window in Genie (T_SPLITTER), from refresh.py
+except Exception: GEN = {}
 APR = J("appr_points.json")   # pitch-time unrecoverable leads per window, fetched from the private sheet tab six_live_inputs by refresh.py   # tracker lead map mirror (data to 21 Oct)
             # BD pocket map unrecoverable leads [pocket, lat, lng, date, never_seen_by_N]
 briefs = J("static/briefs_live.json")["pockets"]
@@ -44,6 +46,7 @@ for r in la:
 print("owner-open entry sources:", Counter(s for r in ev if r["EVENT_NAME"] == "install_candidate_opened" and r["ROLE"] == "" for s in (r["SRCS"] or "").split("|")).most_common())
 for cid, w in W.items():
     g = geo[cid]; pts = spl[cid]["pts"]; m = dict(csp=cid, **w, atom_kind=g["kind"], synced=spl[cid]["synced"], n_pts=len(pts))
+    m["genie_n"] = GEN.get(cid, {}).get("n", 0) if GEN else None; m["genie_reload"] = GEN.get(cid, {}).get("reload")
     m["pts_inside"] = sum(1 for p in pts if inatom(cid, p[0], p[1]))
     m["pts_near50"] = sum(1 for p in pts if not inatom(cid, p[0], p[1]) and dist_to_atom(cid, p[0], p[1]) <= 50)
     b = g["bbox"]; step = 0.00011; tot = cov = 0; la0 = b[0]; unc = []; i = 0

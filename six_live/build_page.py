@@ -1,6 +1,9 @@
 r"""Six live CSPs page: per CSP a map (atom outline, uploaded splitter points + 50 m reach, booking pins coloured by who got
 them) and the twelve asks as tiles; a summary table on top. Writes newcsp-companion/out/area/six-live.html + a Desktop copy."""
 import json, io, os, datetime as dt
+def nice(s):   # "2026-11-04 20:31" -> "4 Nov 20:31"
+    try: return dt.datetime.strptime(s, "%Y-%m-%d %H:%M").strftime("%d %b %H:%M").lstrip("0")
+    except Exception: return s or "?"
 STAMP = io.open("stamp.txt").read().strip(); _NOW = dt.datetime.strptime(STAMP, "%d %b %Y %H:%M"); _L30 = (_NOW - dt.timedelta(days=30)); L30LBL = _L30.strftime("%d %b") + " to " + _NOW.strftime("%d %b")
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = "out/area/six-live.html"
@@ -39,7 +42,9 @@ for i, cid in enumerate(ORDER, 1):
 <tr><td class="mut">no response, timed out (P41)</td><td class="mut">{f.get('timeout',0)}</td><td class="mut">{pct(f.get('timeout',0), f.get('delivered',0))}</td></tr>
 <tr><td class="mut">declined by him</td><td class="mut">{f.get('declined',0)}</td><td class="mut">{pct(f.get('declined',0), f.get('delivered',0))}</td></tr></table>
 <p class="mut">Median time from push to first response: {f.get('med_min_resp')} min. Tasks since go-live only; {m['tasks_all_since_20sep'] - f.get('created',0)} earlier tasks (20 Sep onwards) left out.</p>"""
-    if not f.get("created"): fun = f"<p><b>No task has ever been created for {esc(m['name'])}</b>, so there is no funnel to measure. Routing has never listed him as a candidate: he has no Genie registration (T_CSP / T_SPLITTER), so his {m['n_pts']} uploaded points are invisible to the 50 m rule.</p>"
+    if not f.get("created"):
+        if m.get("genie_n"): fun = f"<p><b>No task has ever been created for {esc(m['name'])}</b>, so there is no funnel to measure. Genie holds his {m['genie_n']} splitters (nightly reload {nice(m['genie_reload'])}), so routing can list him from the next paid booking that lands within 50 m of one of them inside a zone he is authorised on.</p>"
+        else: fun = f"<p><b>No task has ever been created for {esc(m['name'])}</b>, so there is no funnel to measure. Routing has never listed him as a candidate: Genie has none of his splitters (T_SPLITTER), so his {m['n_pts']} uploaded points are invisible to the 50 m rule.</p>"
     sections.append(f"""<section class="card" id="c_{cid}"><h2>{i}. {esc(m['name'])} <span class="mut">{cid} &middot; parent {esc(m['parent'])} &middot; pitched {m['pitch'][8:]} {dt.datetime.strptime(m['pitch'], '%Y-%m-%d').strftime('%b')} &middot; live {dt.datetime.strptime(m['golive'], '%Y-%m-%d %H:%M').strftime('%d %b %H:%M')}</span></h2>
 <div class="row"><div class="mapwrap"><div class="map" id="m_{cid}"></div><div class="legend"><i style="border:2px solid #D9008D;background:rgba(217,0,141,.1)"></i> atom ({esc(m['atom_kind'])}) &nbsp; <b>black ring</b> = installed<br>
 <label><input type="checkbox" id="spl_{cid}" checked> <i style="background:#7B4A12"></i> his splitter mapping, {m['n_pts']} uploaded points (synced {m['synced']}) with 50 m reach</label> &nbsp;
@@ -72,7 +77,7 @@ CHECK = {
  "a0a7i4": dict(spl=("ok","294 pts"), genie=("ok","294"), expo=("ok","0 of 100"), enf=("ok",""), route=("ok","won 2 of 19"), leads=("ok","2 leads, 1 accepted"), verdict=("ok","Live since 28 Oct")),
  "a0a7i6": dict(spl=("ok","424 pts, re-uploaded 27 Oct"), genie=("ok","424"), expo=("ok","0 of 50"), enf=("ok",""), route=("weak","in the list for 3 of 43 bookings since Genie (28 Oct), won 1"), leads=("weak","1 lead 28 Oct 21:13, timed out 29 Oct 15:00"), verdict=("weak","Live since 28 Oct, thin")),
  "a0a7i3": dict(spl=("ok","68 pts, synced 28 Oct 17:51"), genie=("ok","68, registered 9 Oct"), expo=("ok","FULL, Saboli 2, 1 of 100"), enf=("ok",""), route=("weak","first lead 29 Oct, the day after the splitter sync"), leads=("weak","4 leads, 1 install, 2 timed out unanswered"), verdict=("weak","Live since 28 Oct, leads timing out")),
- "a0a7j3": dict(spl=("ok","139 pts, synced 3 Nov 12:07"), genie=("weak","T_CSP row 3 Nov 20:32, 0 splitters loaded yet"), expo=("ok","BASELINE, Sultanpuri-A 44, 0 of 50"), enf=("ok",""), route=("weak","authorised 3 Nov 17:02; zone 44 starts ~1 km north of his points, which sit in Sultanpuri-C 299"), leads=("fail","none yet"), verdict=("weak","Live since 3 Nov evening, no lead yet")),
+ "a0a7j3": dict(spl=("ok","139 pts, synced 3 Nov 12:07"), genie=("ok","139, in Genie since the 3 Nov 20:33 reload"), expo=("ok","BASELINE, Sultanpuri-A 44, 0 of 50"), enf=("ok",""), route=("weak","authorised 3 Nov 17:02 on zone 44 only"), route_note="zone 44 holds none of his 139 splitters (they sit in Sultanpuri-C 299), so no booking can reach him until 299 is added", leads=("fail","none yet"), verdict=("weak","Live since 3 Nov, Genie has him, no lead yet: needs zone 299")),
  "a0a7i8": dict(spl=("ok","114 pts"), genie=("ok","114"), expo=("ok","0 of 50"), enf=("ok",""), route=("fail","no booking in its zone since 13 Oct"), leads=("fail","0"), verdict=("fail","Registered, no demand in its zone")),
 }
 _rt = {r["CSP_ID"]: r for r in json.load(io.open("routing.json", encoding="utf-8"))}
@@ -83,12 +88,18 @@ for _c in CHECK:
         st = CHECK[_c]["route"][0]
         if r["WON"] == 0 and r["RECEIVED"] == 0: st = "fail"
         elif r["WON"] > 0 and st == "fail": st = "weak"
-        CHECK[_c]["route"] = (st, "in the list %d times, won %d%s" % (r["RECEIVED"], r["WON"], (", last " + r["LAST_WON"]) if r.get("LAST_WON") else ""))
+        CHECK[_c]["route"] = (st, "in the list %d times, won %d%s" % (r["RECEIVED"], r["WON"], (", last " + r["LAST_WON"]) if r.get("LAST_WON") else "") + (("; " + CHECK[_c]["route_note"]) if CHECK[_c].get("route_note") else ""))
     conns = {t["CONN"] for t in _tk if t["CSP_ID"] == _c}; inst = {t["CONN"] for t in _tk if t["CSP_ID"] == _c and (t["INST_AT"] or t["ST"] == "CONNECTION_ACTIVE")}
     ls = CHECK[_c]["leads"][0]
     if not conns: ls = "fail"
     elif ls == "fail": ls = "weak"
     CHECK[_c]["leads"] = (ls, "%d leads, %d installs since 20 Sep" % (len(conns), len(inst)))
+try: _gn = json.load(io.open("genie.json", encoding="utf-8"))   # live Genie count per window; the static genie cell above is the fallback
+except Exception: _gn = {}
+for _c in CHECK:
+    if _gn:
+        n = _gn.get(_c, {}).get("n", 0)
+        CHECK[_c]["genie"] = ("ok", "%d splitters in Genie, reload %s" % (n, nice(_gn[_c]["reload"]))) if n else ("fail", "0 splitters in Genie")
 _sk = {}
 try: _sk = {r["CSP_ID"]: r for r in json.load(io.open("stock.json", encoding="utf-8"))}
 except Exception: _sk = {}
@@ -140,7 +151,7 @@ body{{margin:0;background:#F7F5FB;color:#161021;font:14px/1.5 'Segoe UI',system-
 <header><h1>Nine live expansion CSPs: atom vs splitter map, bookings in the atom, task funnel</h1><p class="sub">Atom = the pocket we asked each CSP to expand into (tracker outline). Baseline = confirmed bookings in the atom from 1 Aug to 14 Sep, the same window for all six. <b>Last refreshed {STAMP} IST</b> (auto-refresh every 2 hours) from Dynamo PARTNER_COORDINATES, the booking tables, FACT_INSTALL_CANDIDATES, the TAS state log and the CSP-app CleverTap events.</p></header>
 {CHK_HTML}
 <section class="card"><h2>At a glance</h2><div class="tw"><table id="sum"><tr><th>CSP</th><th>overlap map</th><th>unrecoverable leads at the pitch<br><span class="mut">in the atom, 1 Aug to 14 Sep</span></th><th>atom covered by his splitter mapping<br><span class="mut">within 50 m of one of his points</span></th><th>confirmed bookings: baseline<br><span class="mut">1 Aug to 14 Sep</span></th><th>since go-live</th><th>last 30 days</th><th>leads routed to him since go-live<br><span class="mut">all his zones; customers (installed)</span></th><th class="g">% to him</th><th class="o">% to old CSPs</th><th>% paid, lead not found</th><th>task delivery<br><span class="mut">tasks = all his zones, not only the atom</span></th><th>task open</th><th>response</th><th>assign</th><th>tech arrive</th><th>install</th><th>app open &le;30 min<br><span class="mut">card = opened that task's card</span></th></tr>{''.join(rows)}</table></div>
-<p class="mut">A booking counts only once its payment confirmed it (payment status or booking state set; unpaid attempts are listed per CSP but not counted). Percent to him / to old CSPs / lead not found are over confirmed bookings since go-live and add up to 100%. Funnel rates are over tasks delivered since go-live. Google Broadband, Pavika Broadband and AS Internet Service 2 were registered in Genie only on 28 Oct (T_CSP rows at 20:40 IST), so routing could not see their splitters before that. Google got its first two tasks on 28 Oct 18:57 and 29 Oct 07:58; AS Internet Service 2 still has none because its only authorised zone, Shakti Vihar 569, has had no booking since 13 Oct. Aeronet Solutions (Shri Shyam Ji Network's new window) was registered in Genie on 9 Oct and went live on 12 Oct, but its splitter map was synced only on 28 Oct 17:51; its first lead came on 29 Oct. GEE Broadband (Vinit Broadband's new window) got its CSP account on 3 Nov 11:32, uploaded 139 points at 12:07 and was authorised on zone 44 Sultanpuri-A at 17:02 the same day; Genie had not loaded his splitters by the 4 Nov sync, and zone 44 starts about 1 km north of his mapped points (they fall in Sultanpuri-C, zone 299), so his first leads may land off his cable. Data to {STAMP} IST.</p></section>
+<p class="mut">A booking counts only once its payment confirmed it (payment status or booking state set; unpaid attempts are listed per CSP but not counted). Percent to him / to old CSPs / lead not found are over confirmed bookings since go-live and add up to 100%. Funnel rates are over tasks delivered since go-live. Google Broadband, Pavika Broadband and AS Internet Service 2 were registered in Genie only on 28 Oct (T_CSP rows at 20:40 IST), so routing could not see their splitters before that. Google got its first two tasks on 28 Oct 18:57 and 29 Oct 07:58; AS Internet Service 2 still has none because its only authorised zone, Shakti Vihar 569, has had no booking since 13 Oct. Aeronet Solutions (Shri Shyam Ji Network's new window) was registered in Genie on 9 Oct and went live on 12 Oct, but its splitter map was synced only on 28 Oct 17:51; its first lead came on 29 Oct. GEE Broadband (Vinit Broadband's new window) got its CSP account on 3 Nov 11:32, uploaded 139 points at 12:07 and was authorised on zone 44 Sultanpuri-A at 17:02 the same day; Genie has carried his 139 splitters since its 3 Nov 20:33 reload, but zone 44 starts about 1 km north of every one of them (they fall in Sultanpuri-C, zone 299), so no booking can reach him until routing authorises him on 299 as well. Data to {STAMP} IST.</p></section>
 {''.join(sections)}
 <section class="card"><h2>How these numbers are made</h2><ul>
 <li><b>Atom:</b> the tracker outline for the pocket (Ashu, BB Internet, Mahadev polygons; Google one 300 m circle; Webcity two 300 m circles). AS Internet Service 2 has no tracker outline, so his 450 m BD planning cell 6332_17182 is used. Pavika Broadband (Daiwik's 2nd window) uses the three location outlines from Shreyansh's 'Daiwik 2 - area to be covered' page. Aeronet Solutions (Shri Shyam Ji Network's new window) uses the three outlines from Shreyansh's 'SHRI SHYAM JI NETWORK - area to be covered' page; its BD pocket 6379_17179 is the Saboli Extension outline. GEE Broadband (Vinit Broadband's new window) uses the three outlines from Shreyansh's 'Vinit Broadband - area to be covered' page (Pocket 11 Sector 20, Sector 2 Shani Mandir Sultanpuri = BD pocket 6375_17127, Pocket R Budh Vihar); his pitch-time leads are the 21 on that page, not the tracker lead map.</li>

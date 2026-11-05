@@ -94,6 +94,18 @@ qualify row_number() over (partition by p.partner_id order by p._fivetran_synced
                 if q and len(q) == 2: pts.append([round(float(q[0]), 6), round(float(q[1]), 6)])
         spl[r["CSP_ID"]] = {"pid": r["PID"], "synced": r["SYNCED"], "pts": pts}
     json.dump(spl, io.open("splitters.json", "w"))
+    # 1b Genie, the serviceability engine's own copy of the splitters: T_SPLITTER is re-created nightly (~20:30 IST, synced ~02:10);
+    #    key = LEGACY_PARTNER_ID (the partner id), LONG_PARTNER_ID is null on every row. created_at = reload time, not when the point was added.
+    gen = {}
+    for r in mb(f"""select coalesce(d.csp_id, case s.legacy_partner_id::varchar {' '.join("when '%s' then '%s'" % (v, k) for k, v in PIDS.items())} end) csp_id,
+  count(*) n, to_char(max(s.created_at),'YYYY-MM-DD HH24:MI') reload
+from PROD_DB.GENIE_SERVICEABILITY_PUBLIC.T_SPLITTER s
+left join PROD_DB.DBT_CSP.DIM_CSP d on d.partner_id::varchar = s.legacy_partner_id::varchar and d.etl_current = true and d.csp_id in ({IN})
+where not s._fivetran_deleted and (d.csp_id is not null or s.legacy_partner_id::varchar in ({",".join("'%s'" % v for v in PIDS.values())}))
+group by 1""", "genie"):
+        gen[r["CSP_ID"]] = {"n": int(r["N"]), "reload": r["RELOAD"]}
+    json.dump(gen, io.open("genie.json", "w"))
+    print("  genie          " + ", ".join("%s %d" % (c, gen.get(c, {}).get("n", 0)) for c in CSPS))
     # 2 app launches (owner / manager), pulled per CSP: the combined pull crossed Metabase's 2,000-row cap on 2 Nov
     la = []
     for cid in CSPS:
