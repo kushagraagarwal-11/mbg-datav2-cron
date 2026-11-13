@@ -88,7 +88,8 @@ for _c in CHECK:
         st = CHECK[_c]["route"][0]
         if r["WON"] == 0 and r["RECEIVED"] == 0: st = "fail"
         elif r["WON"] > 0 and st == "fail": st = "weak"
-        CHECK[_c]["route"] = (st, "in the list %d times, won %d%s" % (r["RECEIVED"], r["WON"], (", last " + r["LAST_WON"]) if r.get("LAST_WON") else "") + (("; " + CHECK[_c]["route_note"]) if CHECK[_c].get("route_note") else ""))
+        pct = (" (%d%%)" % round(100.0 * r["WON"] / r["RECEIVED"])) if r["RECEIVED"] else ""
+        CHECK[_c]["route"] = (st, "in the list %d times, won %d%s%s" % (r["RECEIVED"], r["WON"], pct, (", last " + r["LAST_WON"]) if r.get("LAST_WON") else "") + (("; " + CHECK[_c]["route_note"]) if CHECK[_c].get("route_note") else ""))
     conns = {t["CONN"] for t in _tk if t["CSP_ID"] == _c}; inst = {t["CONN"] for t in _tk if t["CSP_ID"] == _c and (t["INST_AT"] or t["ST"] == "CONNECTION_ACTIVE")}
     ls = CHECK[_c]["leads"][0]
     if not conns: ls = "fail"
