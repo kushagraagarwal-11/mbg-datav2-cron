@@ -12,7 +12,7 @@ if _np_os.environ.get("FORCE_NIGHT") != "1" and _np_dt.datetime.now(_np_dt.timez
     print("night pause (00:00-06:00 IST): skipping to cut key-972 warehouse cost", flush=True)
     _np_sys.exit(0)
 # ---
-import io, json, os, subprocess, sys
+import io, json, os, subprocess, sys, time
 from datetime import datetime, timedelta, timezone
 
 import requests
@@ -28,15 +28,28 @@ IN = ",".join("'%s'" % c for c in CSPS)
 SINCE = "2026-09-20"   # first lead of the first window was 24 Sep
 
 
-def mb(sql, name):
-    r = requests.post(MB_URL, headers={"x-api-key": MB_KEY, "Content-Type": "application/json"},
-                      json={"database": DB_ID, "type": "native", "native": {"query": sql}}, timeout=900)
-    r.raise_for_status(); j = r.json()
+def mb(sql, name, tries=3):
+    for attempt in range(tries):
+        try:
+            r = requests.post(MB_URL, headers={"x-api-key": MB_KEY, "Content-Type": "application/json"},
+                              json={"database": DB_ID, "type": "native", "native": {"query": sql}}, timeout=900)
+            r.raise_for_status(); break
+        except requests.exceptions.RequestException as e:   # dropped connection or 5xx: retry, the query is read-only
+            if attempt == tries - 1: raise
+            print("  %-13s retry %d after %s" % (name, attempt + 1, type(e).__name__)); time.sleep(20)
+    j = r.json()
     if j.get("status") == "failed" or "data" not in j: sys.exit("%s: Metabase error: %s" % (name, str(j.get("error", j))[:600]))
     cols = [c["name"] for c in j["data"]["cols"]]; rows = [dict(zip(cols, r)) for r in j["data"]["rows"]]
     for r in rows: r.pop("PAD", None)
     if len(rows) >= 2000: sys.exit("%s: Metabase row cap hit" % name)
     print("  %-13s %5d rows" % (name, len(rows))); return rows
+
+
+def mbc(make_sql, name):
+    """Same query once per window (Metabase caps a result at 2,000 rows; the 11 windows together passed it on 16 Nov)."""
+    rows = []
+    for c in CSPS: rows += mb(make_sql("'%s'" % c), "%s %s" % (name, c))
+    print("  %-13s %5d rows in all" % (name, len(rows))); return rows
 
 
 def appr_points():
@@ -186,18 +199,18 @@ select m.atom, to_char(m.added_time,'YYYY-MM-DD HH24:MI') booked, round(m.lat,6)
 from m where m.rn = 1 order by m.atom, m.added_time""", "bookings_all " + _cid)
     json.dump(bk_rows, io.open("bookings.json", "w")); json.dump(bka_rows, io.open("bookings_all.json", "w"))
     # 7 CleverTap task events per execution candidate (role '' = owner/manager device, 'technician' = technician device)
-    json.dump(mb(f"""with t as (select execution_candidate_id ec, csp_id from PROD_DB.DBT_CSP.FACT_INSTALL_CANDIDATES where etl_current = true and task_family = 'INSTALL' and csp_id in ({IN}) and created_at >= '{SINCE}'),
-pr as (select clevertap_id, cspid, case when lower(role) = 'technician' then 'technician' else '' end role from PROD_DB.CLEVERTAP_CSP_API.PROFILE_DATA where cspid in ({IN}) and not _fivetran_deleted)
+    json.dump(mbc(lambda ID: f"""with t as (select execution_candidate_id ec, csp_id from PROD_DB.DBT_CSP.FACT_INSTALL_CANDIDATES where etl_current = true and task_family = 'INSTALL' and csp_id in ({ID}) and created_at >= '{SINCE}'),
+pr as (select clevertap_id, cspid, case when lower(role) = 'technician' then 'technician' else '' end role from PROD_DB.CLEVERTAP_CSP_API.PROFILE_DATA where cspid in ({ID}) and not _fivetran_deleted)
 select t.csp_id, t.ec, e.event_name, pr.role, min(e."TIMESTAMP") first_ts, max(e."TIMESTAMP") last_ts, count(*) n, count(distinct e.clevertap_id) devices,
   listagg(distinct try_parse_json(e.properties):entry_source::varchar, '|') srcs
 from PROD_DB.CLEVERTAP_CSP_API.EVENTS_DATA e join pr on pr.clevertap_id = e.clevertap_id join t on t.ec = try_parse_json(e.properties):execution_id::varchar
 where e._fivetran_synced >= '{SINCE}' and not e._fivetran_deleted and e."TIMESTAMP" >= '{SINCE}' and e.event_name in ('fpn_delivered','install_candidate_opened','pn_clicked','pn_delivered')
 group by 1,2,3,4 order by 1,2,5""", "events"), io.open("events.json", "w"))
     # 8 seconds from push delivery to first app interaction (ui30)
-    json.dump(mb(f"""with t as (select execution_candidate_id ec, csp_id from PROD_DB.DBT_CSP.FACT_INSTALL_CANDIDATES where etl_current = true and task_family = 'INSTALL' and csp_id in ({IN}) and created_at >= '{SINCE}'),
+    json.dump(mbc(lambda ID: f"""with t as (select execution_candidate_id ec, csp_id from PROD_DB.DBT_CSP.FACT_INSTALL_CANDIDATES where etl_current = true and task_family = 'INSTALL' and csp_id in ({ID}) and created_at >= '{SINCE}'),
 dl as (select t.csp_id, t.ec, min(try_to_timestamp(e."TIMESTAMP")) delivered_at from t join PROD_DB.CLEVERTAP_CSP_API.EVENTS_DATA e on try_parse_json(e.properties):execution_id::varchar = t.ec
   where e._fivetran_synced >= '{SINCE}' and not e._fivetran_deleted and e.event_name in ('pn_delivered','fpn_delivered') group by 1,2),
-pr as (select clevertap_id, cspid from PROD_DB.CLEVERTAP_CSP_API.PROFILE_DATA where cspid in ({IN}) and not _fivetran_deleted and upper(role) in ('OWNER','MANAGER')),
+pr as (select clevertap_id, cspid from PROD_DB.CLEVERTAP_CSP_API.PROFILE_DATA where cspid in ({ID}) and not _fivetran_deleted and upper(role) in ('OWNER','MANAGER')),
 ui as (select pr.cspid, e.event_name, try_to_timestamp(e."TIMESTAMP") ts from PROD_DB.CLEVERTAP_CSP_API.EVENTS_DATA e join pr on pr.clevertap_id = e.clevertap_id
   where e._fivetran_synced >= '{SINCE}' and not e._fivetran_deleted and e.event_name in ('home_feed_rendered','install_candidate_opened','candidate_closed','drawer_opened','sheet_opened','strip_chip_opened','home_refreshed','batch_drilldown_opened','drawer_item_opened','feed_refreshed','service_status_opened','overflow_menu_opened','nbrec_group_opened','recharge_customer_selected','ticket_accepted','technician_assigned','install_task_assigned','restore_candidate_opened','pickup_candidate_opened','pn_clicked','fpn_action_taken','call_initiated','deeplink_clicked','banner_opened','app_exited'))
 select dl.csp_id, dl.ec, min(case when ui.ts >= dl.delivered_at then datediff('second', dl.delivered_at, ui.ts) end) sec_ui_after
