@@ -34,6 +34,17 @@ def pin(cid, r):
     elif age_h < 48: b = 1
     else: b = 3
     return [r["LAT"], r["LNG"], r["BOOKED"], who, int(inst), int(byhim), b]
+RTC = {"installed": (0, 0), "open": (1, 1), "cx_cancel": (2, 2), "timeout": (3, 3), "declined": (3, 4), "failed": (3, 5), "other": (3, 6)}
+def rt_rows(cid):
+    """Every lead routing sent this window since go-live, any zone (metrics.json routed, one row per customer):
+    [lat, lng, bucket (0 installed by him / 1 open / 2 customer cancelled / 3 not installed), inside the atom, first offer IST, offers, m outside the atom, outcome code]."""
+    out = []
+    for r in M[cid].get("routed", []):
+        b, code = RTC.get(r["out"], (3, 6))
+        try: ts = dt.datetime.strptime(r["first"] + " %d" % NOW.year, "%d %b %H:%M %Y").strftime("%Y-%m-%d %H:%M")
+        except Exception: ts = None
+        out.append([r["lat"], r["lng"], b, int(bool(r["inside"])), ts, r["offers"], r["dist"], code])
+    return out
 wins = []
 for cid, m in M.items():
     g = geo[cid]
@@ -45,7 +56,7 @@ for cid, m in M.items():
         if cur is None or (p[4] and not cur[4]) or (p[4] == cur[4] and p[2] > cur[2]): byk[k] = p
     pts = sorted(byk.values(), key=lambda p: p[2])
     wins.append(dict(key=g["key"], cid=cid, name=m["name"], sname=short(m["name"]), parent=m["parent"], golive=m["golive"], pitch=m["pitch"], kind=g["kind"],
-                     rings=g["rings"], spl=spl.get(cid, {}).get("pts", []), spl_synced=spl.get(cid, {}).get("synced"), cov=m.get("cov_pct"), pts=pts))
+                     rings=g["rings"], spl=spl.get(cid, {}).get("pts", []), spl_synced=spl.get(cid, {}).get("synced"), cov=m.get("cov_pct"), pts=pts, rt=rt_rows(cid)))
     n = len(pts); gl = P(m["golive"])
     print("%-8s %-28s pins %4d | after go-live %3d | installed %3d (by him %2d) | unrec %3d" % (cid, short(m["name"])[:28], n, sum(1 for p in pts if P(p[2]) >= gl),
           sum(p[4] for p in pts if P(p[2]) >= gl), sum(p[5] for p in pts if P(p[2]) >= gl), sum(1 for p in pts if P(p[2]) >= gl and p[6] == 3)))

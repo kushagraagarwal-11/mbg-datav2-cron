@@ -28,6 +28,14 @@ a{color:inherit}
 .how{padding:6px 16px;background:var(--accent-soft);color:var(--text);font-size:.8rem;border-bottom:1px solid #F6C9E6;line-height:1.35}
 .how b{font-weight:700}
 .wrap{position:relative}
+.wrap.all .divider{display:none}
+.wrap.all .cards{position:static;display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:10px 16px 0;pointer-events:auto}
+.wrap.all .card{position:static;width:auto}
+@media (min-width:900px){.wrap.all .nums{grid-template-columns:repeat(4,1fr)}}
+.leaflet-marker-icon.rtd{background:none;border:0}
+.rtd div{width:12px;height:12px;border:2px solid #fff;box-shadow:0 0 0 1.5px #161021;transform:rotate(45deg)}
+.legend i.dia{border-radius:2px;transform:rotate(45deg);width:9px;height:9px;background:#161021;box-shadow:0 0 0 1px rgba(0,0,0,.18)}
+.foot a.lnk{color:var(--accent);font-weight:600;text-decoration:none;cursor:pointer}
 .stage{position:relative;height:66vh;min-height:440px;overflow:hidden;background:#EAE8EF}
 .map{position:absolute;inset:0;background:#EAE8EF;isolation:isolate}
 #mapB{z-index:1}
@@ -108,7 +116,7 @@ table.rk{width:100%;border-collapse:collapse;font-size:.82rem;font-variant-numer
 .leaflet-tooltip.pk{background:#fff;color:var(--text);border:1px solid var(--border);border-radius:8px;font-size:.72rem;font-weight:500;padding:3px 8px;box-shadow:0 2px 8px rgba(22,16,33,.18);pointer-events:none;line-height:1.3;white-space:nowrap}
 .leaflet-tooltip.pk b{font-weight:700;color:var(--accent);margin-right:4px}
 .leaflet-tooltip.pk.few b{color:var(--drop)}
-.leaflet-tooltip.pk small{color:var(--muted);font-weight:400;margin-left:4px}
+.leaflet-tooltip.pk small{color:var(--muted);font-weight:400;margin-left:5px;font-variant-numeric:tabular-nums}
 .leaflet-tooltip.pk::before{display:none}
 .err{padding:40px 16px;text-align:center;color:var(--muted)}
 @media (max-width:720px){
@@ -132,7 +140,7 @@ table.rk{width:100%;border-collapse:collapse;font-size:.82rem;font-variant-numer
   <div class="chips" id="chips" role="group" aria-label="Pick a window"></div>
   <div class="stamp" id="stamp">data to {{STAMP}} IST, refreshed every 2 hours &middot; <a href="/area/six-live">checklist and funnels &rarr;</a></div>
 </header>
-<div class="how" id="how"><b>One dot = one paid booking that fell inside the atom we gave the CSP.</b> Drag the handle: left of it is <b>before</b> go-live, right of it is <b>since</b>. Green installed &middot; red nobody installed (unrecoverable) &middot; amber still open &middot; grey the customer dropped it. On the all-windows view each atom carries its rank; the table below orders every window by how much the unrecoverable leads fell per 30 days, or by the SE gain. Click a row, a chip or an atom to open it.</div>
+<div class="how" id="how"><b>One dot = one paid booking inside the atom we gave the CSP.</b> All-windows view: one map, each atom with its rank and before &rarr; after; the table ranks the windows by the fall in unrecoverable leads per 30 days or by the SE gain. Open a window for the swipe (left before go-live, right since): green installed &middot; red nobody installed &middot; amber open &middot; grey customer dropped. &ldquo;All his leads&rdquo; adds every lead routed to him outside the atom as diamonds.</div>
 <div class="wrap">
 <div class="stage" id="stage">
   <div class="map" id="mapB" aria-label="Before go-live"></div>
@@ -144,6 +152,7 @@ table.rk{width:100%;border-collapse:collapse;font-size:.82rem;font-variant-numer
     <span id="lg-dots"><i style="background:#008043"></i>Installed &nbsp;<i style="background:#FF8000"></i>Open &nbsp;<i style="background:#8E8A99"></i>Customer dropped &nbsp;<i style="background:#E01E00"></i>Nobody installed</span>
     <span id="lg-atom"><i class="ring"></i>Atom given to the CSP</span>
     <span id="lg-all" hidden><i class="ring g"></i>Better &nbsp;<i class="ring r"></i>Worse &nbsp;<i class="ring x"></i>Too few leads to call</span>
+    <span id="lg-his" hidden><i class="dia"></i>Routed to him outside the atom (diamond, same colours), After side</span>
     <span id="lg-spl" hidden><i style="background:#6D17CE"></i>His uploaded splitter points</span>
   </div>
   <div class="ctrl">
@@ -151,6 +160,7 @@ table.rk{width:100%;border-collapse:collapse;font-size:.82rem;font-variant-numer
     <button class="btn icon" id="zout" title="Zoom out" aria-label="Zoom out">&minus;</button>
     <button class="btn" id="fit" title="Fit the atoms in view">Fit</button>
     <span class="sep"></span>
+    <button class="btn" id="his" aria-pressed="false" title="Every lead routing sent this CSP since go-live, any zone: diamonds outside the atom on the After side">All his leads</button>
     <button class="btn" id="spl" aria-pressed="false" title="His uploaded splitter points (Dynamo PARTNER_COORDINATES), on the After side">Splitters</button>
   </div>
 </div>
@@ -178,7 +188,8 @@ const LBL=['Installed','Still open','Dropped by the customer','Nobody installed,
 const WHO=['routed to {n}','routed to an old CSP','paid, but no lead was found'];
 const MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const DAY=864e5,FEW=5;
-let W=[],R=[],SEL='all',BEFORE='matched',AFTER='golive',RANK='unrec',SPL=false,syncing=false,mB=null,mA=null,split=0.5;
+let W=[],R=[],SEL='all',BEFORE='matched',AFTER='golive',RANK='unrec',SPL=false,HIS=false,syncing=false,mB=null,mA=null,split=0.5;
+const RTX=['installed by him','still with him, task open','cancelled by the customer','no response, timed out','declined by him','visit failed','closed without an install'];
 const $=id=>document.getElementById(id);
 const pad=n=>(n<10?'0':'')+n;
 function parseT(s){return new Date(+s.slice(0,4),+s.slice(5,7)-1,+s.slice(8,10),+(s.slice(11,13)||0),+(s.slice(14,16)||0)).getTime();}
@@ -193,7 +204,8 @@ function pc(n){return n==null?'–':Math.round(n)+'%';}
 function prep(){const dataTo=parseT(D.now),baseFrom=parseT(D.base_from+' 00:00');W=[];
   for(const w of D.wins){const go=parseT(w.golive);
     const pts=w.pts.map(p=>({lat:p[0],lng:p[1],t:parseT(p[2]),who:p[3],inst:!!p[4],byhim:!!p[5],b:p[6]}));
-    W.push(Object.assign({},w,{go,dataTo,baseFrom,pitch:w.pitch?parseT(w.pitch+' 00:00'):null,pts,postDays:Math.max(0,(dataTo-go)/DAY)}));}
+    const rt=(w.rt||[]).map(q=>({lat:q[0],lng:q[1],b:q[2],inside:!!q[3],t:q[4]?parseT(q[4]):go,offers:q[5],dist:q[6],code:q[7]}));
+    W.push(Object.assign({},w,{go,dataTo,baseFrom,pitch:w.pitch?parseT(w.pitch+' 00:00'):null,pts,rt,postDays:Math.max(0,(dataTo-go)/DAY)}));}
 }
 function sel(){return SEL==='all'?W:W.filter(w=>w.key===SEL);}
 function afterRange(w){const d0=startOfDay(w.dataTo);
@@ -217,6 +229,17 @@ function rank(){R=W.map(w=>{const B=stats(w,'before'),A=stats(w,'after');const f
   R.sort((x,y)=>(x.few-y.few)||(key(x)-key(y))||(y.A.byhim-x.A.byhim));
   R.forEach((x,i)=>{x.pos=i+1;x.good=x.few?null:(RANK==='unrec'?x.dU<0:(x.dSE!=null&&x.dSE>0));x.flat=!x.few&&(RANK==='unrec'?Math.abs(x.dU)<0.05:(x.dSE==null||Math.abs(x.dSE)<0.5));});}
 function rowOf(w){return R.find(x=>x.w===w);}
+/* his routed leads (every lead routing sent him since go-live, any zone), after side only */
+function rtRows(w){const r=afterRange(w);return w.rt.filter(q=>q.t>=r[0]&&q.t<r[1]);}
+function rtStats(w){const t={n:0,inst:0,open:0,cx:0,dead:0,out:0,outInst:0,nopin:0};
+  for(const q of rtRows(w)){t.n++;if(q.b===0)t.inst++;else if(q.b===1)t.open++;else if(q.b===2)t.cx++;else t.dead++;if(q.lat==null)t.nopin++;else if(!q.inside){t.out++;if(q.b===0)t.outInst++;}}return t;}
+function rtSum(ws){const T={n:0,inst:0,open:0,cx:0,dead:0,out:0,outInst:0,nopin:0};for(const w of ws){const s=rtStats(w);for(const k in T)T[k]+=s[k];}return T;}
+function hav(a,b){const p=Math.PI/180,x=Math.sin((b[0]-a[0])*p/2)**2+Math.cos(a[0]*p)*Math.cos(b[0]*p)*Math.sin((b[1]-a[1])*p/2)**2;return 12742000*Math.asin(Math.sqrt(x));}
+function labelDirs(){const C=R.map(x=>({x,c:centreOf(x.w)}));const dirs={};const seen=new Set();const D4=['top','left','right','bottom'];
+  for(let i=0;i<C.length;i++){if(seen.has(i))continue;const grp=[i];seen.add(i);
+    for(let j=i+1;j<C.length;j++){if(seen.has(j)||!C[i].c||!C[j].c)continue;if(hav(C[i].c,C[j].c)<3000){grp.push(j);seen.add(j);}}
+    grp.sort((a,b)=>(C[b].c?C[b].c[0]:0)-(C[a].c?C[a].c[0]:0));grp.forEach((k,n)=>{dirs[C[k].x.w.key]=grp.length===1?'top':D4[n%4];});}
+  return dirs;}
 
 /* ---- maps ---- */
 function mkMap(id){const m=L.map(id,{preferCanvas:true,zoomControl:false,attributionControl:id==='mapA',scrollWheelZoom:true,zoomSnap:.25});
@@ -225,12 +248,12 @@ function mkMap(id){const m=L.map(id,{preferCanvas:true,zoomControl:false,attribu
 function sync(from,to){if(syncing)return;syncing=true;to.setView(from.getCenter(),from.getZoom(),{animate:false});syncing=false;}
 function centreOf(w){const pts=[].concat(...w.rings);if(!pts.length)return null;let la=0,ln=0;for(const q of pts){la+=q[0];ln+=q[1];}return [la/pts.length,ln/pts.length];}
 function tone(x){return x.few?{c:'#8E8A99',f:.12}:x.flat?{c:'#A7A1B2',f:.14}:x.good?{c:'#008043',f:.14}:{c:'#E01E00',f:.14};}
-function drawStatic(m,side){m.lay.clearLayers();const all=SEL==='all';
+function drawStatic(m,side){m.lay.clearLayers();const all=SEL==='all';const dirs=all?labelDirs():{};
   for(const w of sel()){const x=rowOf(w);const tn=all?tone(x):{c:'#D9008D',f:.06};
     for(const ring of w.rings){const pg=L.polygon(ring,{color:tn.c,weight:all?2:2.5,fillColor:tn.c,fillOpacity:tn.f,interactive:all}).addTo(m.lay);
       if(all)pg.on('click',()=>select(w.key));}
-    if(all){const c=centreOf(w);if(c){const i=R.indexOf(x);const dir=['top','right','bottom','left'][i%4];
-      const s=side==='before'?x.B:x.A;const lab=RANK==='unrec'?`${fmt1(s.unrec30)} unrec/30 d`:`SE ${pc(s.se)}`;
+    if(all){const c=centreOf(w);if(c){const dir=dirs[w.key]||'top';
+      const lab=RANK==='unrec'?`${fmt1(x.B.unrec30)} \u2192 ${fmt1(x.A.unrec30)} unrec/30 d`:`SE ${pc(x.B.se)} \u2192 ${pc(x.A.se)}`;
       L.circleMarker(c,{radius:8,fillColor:tn.c,color:'#fff',weight:2,fillOpacity:.95}).bindTooltip(`<b>#${x.pos}</b>${esc(w.sname)}<small>${lab}</small>`,{className:'pk'+(x.few?' few':''),direction:dir,permanent:true,opacity:.97,offset:dir==='top'?[0,-7]:dir==='bottom'?[0,7]:dir==='left'?[-7,0]:[7,0]}).on('click',()=>select(w.key)).addTo(m.lay);}}
   }}
 function drawSpl(m,side){m.spl.clearLayers();if(!SPL||side!=='after')return;const all=SEL==='all';
@@ -239,12 +262,18 @@ function drawSpl(m,side){m.spl.clearLayers();if(!SPL||side!=='after')return;cons
 function tip(w,p,side){const who=WHO[p.who].replace('{n}',esc(w.sname));const by=p.inst?(p.byhim?' by '+esc(w.sname):' by another CSP'):'';
   const rel=Math.round((startOfDay(p.t)-startOfDay(w.go))/DAY);
   return `<b>${LBL[p.b]}${by}</b>${nice(p.t)} · ${who} · ${rel>=0?'D+'+rel:'D'+rel}`;}
+function rtip(w,q){return `<b>Routed to ${esc(w.sname)}: ${RTX[q.code]||RTX[6]}</b>${nice(q.t)} \u00b7 ${q.dist} m outside the atom${q.offers>1?' \u00b7 '+q.offers+' offers':''}`;}
 function drawPins(m,side){m.pins.clearLayers();if(SEL==='all')return;
-  for(const w of sel())for(const p of w.pts){if(sideOf(w,p.t)!==side)continue;
-    L.circleMarker([p.lat,p.lng],{radius:6.5,fillColor:COL[p.b],color:p.byhim?'#161021':'#fff',weight:p.byhim?2:1.5,fillOpacity:.95}).bindTooltip(tip(w,p,side),{className:'tip',direction:'top',offset:[0,-6]}).addTo(m.pins);}}
+  for(const w of sel()){for(const p of w.pts){if(sideOf(w,p.t)!==side)continue;
+      L.circleMarker([p.lat,p.lng],{radius:6.5,fillColor:COL[p.b],color:p.byhim?'#161021':'#fff',weight:p.byhim?2:1.5,fillOpacity:.95}).bindTooltip(tip(w,p,side),{className:'tip',direction:'top',offset:[0,-6]}).addTo(m.pins);}
+    if(HIS&&side==='after')for(const q of rtRows(w)){if(q.lat==null||q.inside)continue;
+      L.marker([q.lat,q.lng],{icon:L.divIcon({className:'rtd',html:`<div style="background:${COL[q.b]}"></div>`,iconSize:[14,14],iconAnchor:[7,7]}),keyboard:false}).bindTooltip(rtip(w,q),{className:'tip',direction:'top',offset:[0,-8]}).addTo(m.pins);}}}
 function bounds(){let b=null;for(const w of sel())for(const ring of w.rings){const pb=L.polygon(ring).getBounds();b=b?b.extend(pb):pb;}return b;}
-function fit(){const b=bounds();if(!b)return;const wide=window.innerWidth>720;
-  mA.fitBounds(b.pad(SEL==='all'?0.08:0.3),{animate:false,paddingTopLeft:[wide?350:16,wide?24:16],paddingBottomRight:[wide?350:16,wide?64:16]});sync(mA,mB);}
+function fit(){let b=bounds();if(!b)return;const wide=window.innerWidth>720,all=SEL==='all';
+  if(!all&&HIS)for(const w of sel())for(const q of rtRows(w))if(q.lat!=null&&!q.inside&&q.dist<=1500)b=b.extend([q.lat,q.lng]);
+  if(all)mA.fitBounds(b.pad(0.06),{animate:false,paddingTopLeft:[16,16],paddingBottomRight:[16,wide?60:16]});
+  else mA.fitBounds(b.pad(0.3),{animate:false,paddingTopLeft:[wide?350:16,wide?24:16],paddingBottomRight:[wide?350:16,wide?64:16]});
+  sync(mA,mB);}
 
 /* ---- cards ---- */
 function windowLabel(side){const ws=sel();
@@ -272,24 +301,27 @@ function cards(){const ws=sel(),B=sum(ws,'before'),A=sum(ws,'after');const one=w
     +num('',pc(A.se),'SE, installed share of settled',chip(B.se,A.se,false,0,' pp'))+'</div>';
   if(A.open||A.dropped)hA+=`<div class="foot">${A.open?A.open+' still open':''}${A.open&&A.dropped?' · ':''}${A.dropped?A.dropped+' dropped by the customer':''}</div>`;
   if(one){const x=rowOf(ws[0]);hA+=`<div class="foot">Rank <b>#${x.pos} of ${W.length}</b> ${RANK==='unrec'?'by fewer unrecoverable leads':'by SE gain'}${x.few?' · too few leads on one side to call it':''} · live ${nice(ws[0].go)}, ${Math.round(ws[0].postDays)} days${ws[0].cov!=null?' · '+ws[0].cov+'% of the atom within 50 m of his points':''}</div>`;}
+  const H=rtSum(ws);if(H.n)hA+=`<div class="foot">Every lead routed to ${nm} in this window, any zone: <b>${H.n}</b> \u00b7 <b>${H.inst}</b> installed by ${one?'him':'them'} \u00b7 ${H.open} open \u00b7 ${H.dead} timed out, declined or failed \u00b7 ${H.cx} dropped by the customer. <b>${H.out}</b> fell outside the atom${one?'':'s'} (${H.outInst} installed)${H.nopin?', '+H.nopin+' without a pin':''}${one?(HIS?' \u00b7 shown as diamonds':' \u00b7 <a class="lnk" data-his="1">show them on the map</a>'):''}</div>`;
+  else if(one)hA+=`<div class="foot">No lead has been routed to ${nm} in this window, any zone.</div>`;
   if(SPL)hA+=`<div class="foot">${one?esc(ws[0].sname)+'’s':'The CSPs’'} uploaded splitter points: <b>${ws.reduce((n,w)=>n+w.spl.length,0)}</b></div>`;
   $('cardA').innerHTML=hA;
+  document.querySelectorAll('#cardA [data-his]').forEach(a=>a.addEventListener('click',e=>{e.preventDefault();HIS=true;redraw();fit();}));
   document.querySelectorAll('#cardB [data-b]').forEach(b=>b.addEventListener('click',()=>{BEFORE=b.dataset.b;redraw();}));
   document.querySelectorAll('#cardA [data-a]').forEach(b=>b.addEventListener('click',()=>{AFTER=b.dataset.a;redraw();}));}
 
 /* ---- ranked table ---- */
 function table(){const maxU=Math.max(.1,...R.filter(x=>!x.few).map(x=>Math.abs(x.dU))),maxS=Math.max(1,...R.filter(x=>!x.few&&x.dSE!=null).map(x=>Math.abs(x.dSE)));
-  let h=`<thead><tr><th></th><th class="l"></th><th class="grp" colspan="3">Before</th><th class="grp a" colspan="4">Since go-live</th><th class="grp" colspan="2">Change</th></tr>
-  <tr><th>#</th><th class="l">Window</th><th>bookings<br>/30 d</th><th>unrec.<br>/30 d</th><th>SE</th><th class="sep-l">bookings<br>/30 d</th><th>unrec.<br>/30 d</th><th>SE</th><th>installed<br>by him</th><th class="sep-l">unrec. /30 d</th><th>SE</th></tr></thead><tbody>`;
-  for(const x of R){const w=x.w,B=x.B,A=x.A;const cu=x.few?'mut':x.dU<-0.05?'ok':x.dU>0.05?'bad':'mut',cs=x.few||x.dSE==null?'mut':x.dSE>0.5?'ok':x.dSE<-0.5?'bad':'mut';
+  let h=`<thead><tr><th></th><th class="l"></th><th class="grp" colspan="3">Before</th><th class="grp a" colspan="5">Since go-live</th><th class="grp" colspan="2">Change</th></tr>
+  <tr><th>#</th><th class="l">Window</th><th>bookings<br>/30 d</th><th>unrec.<br>/30 d</th><th>SE</th><th class="sep-l">bookings<br>/30 d</th><th>unrec.<br>/30 d</th><th>SE</th><th>installed<br>by him</th><th>his installs<br>anywhere</th><th class="sep-l">unrec. /30 d</th><th>SE</th></tr></thead><tbody>`;
+  for(const x of R){const w=x.w,B=x.B,A=x.A,H=rtStats(w);const cu=x.few?'mut':x.dU<-0.05?'ok':x.dU>0.05?'bad':'mut',cs=x.few||x.dSE==null?'mut':x.dSE>0.5?'ok':x.dSE<-0.5?'bad':'mut';
     const bu=x.few?'':`<i class="bar2${x.dU>0?' dn':''}" style="width:${Math.round(100*Math.abs(x.dU)/maxU)}px"></i>`,bs=x.few||x.dSE==null?'':`<i class="bar2${x.dSE<0?' dn':''}" style="width:${Math.round(100*Math.abs(x.dSE)/maxS)}px"></i>`;
     h+=`<tr data-key="${w.key}" tabindex="0" class="${x.few?'few':''}" aria-selected="${SEL===w.key}"><td><span class="pos">${x.pos}</span></td>
     <td class="l"><b>${esc(w.sname)}</b><span class="sub">${esc(w.cid)} · live ${nice(w.go)} · ${Math.round(w.postDays)} d${x.few?' · too few leads to call':''}</span></td>
     <td>${fmt1(B.leads30)}<span class="sub" style="display:block;color:var(--muted);font-size:.7rem">${B.leads} in ${Math.round(B.days)} d</span></td><td class="bad">${fmt1(B.unrec30)}</td><td>${pc(B.se)}</td>
-    <td class="sep-l">${fmt1(A.leads30)}<span class="sub" style="display:block;color:var(--muted);font-size:.7rem">${A.leads} in ${Math.round(A.days)} d</span></td><td class="bad">${fmt1(A.unrec30)}</td><td>${pc(A.se)}</td><td class="ok">${A.byhim}<span class="sub" style="display:block;color:var(--muted);font-size:.7rem;font-weight:400">of ${A.inst} installed</span></td>
+    <td class="sep-l">${fmt1(A.leads30)}<span class="sub" style="display:block;color:var(--muted);font-size:.7rem">${A.leads} in ${Math.round(A.days)} d</span></td><td class="bad">${fmt1(A.unrec30)}</td><td>${pc(A.se)}</td><td class="ok">${A.byhim}<span class="sub" style="display:block;color:var(--muted);font-size:.7rem;font-weight:400">of ${A.inst} installed</span></td><td class="ok">${H.inst}<span class="sub" style="display:block;color:var(--muted);font-size:.7rem;font-weight:400">of ${H.n} routed, any zone</span></td>
     <td class="sep-l ${cu} num"><b>${sg(x.dU,1)}</b>${RANK==='unrec'?bu:''}</td><td class="${cs} num"><b>${x.dSE==null?'–':sg(x.dSE,0)+' pp'}</b>${RANK==='se'?bs:''}</td></tr>`;}
   h+='</tbody>';$('rk').innerHTML=h;
-  $('rkHint').textContent=RANK==='unrec'?'Unrecoverable = paid booking in the atom that nobody installed (closed, or older than 48 h with nothing running). Per 30 days so windows of different length compare. Most negative change first.':'SE = installed share of settled bookings in the atom (open ones left out). Biggest gain first.';
+  $('rkHint').textContent=(RANK==='unrec'?'Unrecoverable = paid booking in the atom that nobody installed (closed, or older than 48 h with nothing running). Per 30 days so windows of different length compare. Most negative change first.':'SE = installed share of settled bookings in the atom (open ones left out). Biggest gain first.')+' His installs anywhere = every lead routing sent him in the After window, any zone, not only the atom.';
   document.querySelectorAll('#rk tr[data-key]').forEach(r=>{const go=()=>select(r.dataset.key);r.addEventListener('click',go);r.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();go();}});});}
 
 /* ---- divider ---- */
@@ -308,10 +340,11 @@ function wireDivider(){const d=$('divider'),st=$('stage');let drag=false;
 function chips(){const box=$('chips');box.innerHTML='';
   const mk=(key,label,pos)=>{const b=document.createElement('button');b.type='button';b.className='chip';b.innerHTML=(pos?`<span class="r">${pos}</span>`:'')+esc(label);b.setAttribute('aria-pressed',SEL===key?'true':'false');b.addEventListener('click',()=>select(key));box.appendChild(b);};
   mk('all','All '+W.length+' windows');for(const x of R)mk(x.w.key,x.w.sname,x.pos);}
-function legend(){$('lg-dots').hidden=SEL==='all';$('lg-atom').hidden=SEL==='all';$('lg-all').hidden=SEL!=='all';$('lg-spl').hidden=!SPL;$('spl').setAttribute('aria-pressed',SPL?'true':'false');
+function legend(){const all=SEL==='all';$('lg-dots').hidden=all;$('lg-atom').hidden=all;$('lg-all').hidden=!all;$('lg-spl').hidden=!SPL;$('lg-his').hidden=!HIS||all;$('spl').setAttribute('aria-pressed',SPL?'true':'false');$('his').setAttribute('aria-pressed',HIS?'true':'false');
   document.querySelectorAll('#rankby [data-r]').forEach(b=>b.setAttribute('aria-pressed',b.dataset.r===RANK?'true':'false'));
   $('rkTitle').textContent=SEL==='all'?'All windows, ranked':'All windows, ranked · '+W.find(w=>w.key===SEL).sname+' highlighted';}
-function redraw(){rank();drawStatic(mB,'before');drawStatic(mA,'after');drawSpl(mB,'before');drawSpl(mA,'after');drawPins(mB,'before');drawPins(mA,'after');cards();table();chips();legend();}
+function redraw(){rank();const all=SEL==='all';document.querySelector('.wrap').classList.toggle('all',all);if(all)$('mapA').style.clipPath='none';else setSplit(split);
+  drawStatic(mB,'before');drawStatic(mA,'after');drawSpl(mB,'before');drawSpl(mA,'after');drawPins(mB,'before');drawPins(mA,'after');cards();table();chips();legend();mA.invalidateSize();mB.invalidateSize();}
 function select(k){const w=W.find(x=>x.key===k||x.cid===k);SEL=w?w.key:'all';try{history.replaceState(null,'',SEL==='all'?location.pathname:'#'+SEL);}catch(e){}redraw();fit();}
 
 function load(){
@@ -322,9 +355,9 @@ function load(){
     mA.on('move zoom',()=>sync(mA,mB));mB.on('move zoom',()=>sync(mB,mA));
     wireDivider();setSplit(.5);
     $('zin').addEventListener('click',()=>mA.zoomIn());$('zout').addEventListener('click',()=>mA.zoomOut());$('fit').addEventListener('click',fit);
-    $('spl').addEventListener('click',()=>{SPL=!SPL;redraw();});
+    $('spl').addEventListener('click',()=>{SPL=!SPL;redraw();});$('his').addEventListener('click',()=>{HIS=!HIS;redraw();if(SEL!=='all')fit();});
     document.querySelectorAll('#rankby [data-r]').forEach(b=>b.addEventListener('click',()=>{RANK=b.dataset.r;redraw();}));
-    SPL=/(^|[?&])spl=1/.test(location.search);
+    SPL=/(^|[?&])spl=1/.test(location.search);HIS=/(^|[?&])his=1/.test(location.search);
     const h=location.hash.slice(1);const w0=W.find(x=>x.key===h||x.cid===h);SEL=w0?w0.key:'all';
     window.addEventListener('hashchange',()=>{const k=location.hash.slice(1);const w=W.find(x=>x.key===k||x.cid===k);if((w?w.key:'all')!==SEL){SEL=w?w.key:'all';redraw();fit();}});
     redraw();fit();
