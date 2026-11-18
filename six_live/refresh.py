@@ -254,7 +254,7 @@ from c left join inv i on i.pid = c.csp_id left join ord o on o.csp_id = c.csp_i
     courier_status(stock); json.dump(stock, io.open("stock.json", "w"))
     stamp = NOW.strftime("%d %b %Y %H:%M")
     io.open("stamp.txt", "w").write(stamp)
-    for step in ("compute.py", "build_page.py"):
+    for step in ("compute.py", "build_page.py", "build_compare.py"):
         print("running", step); subprocess.run([sys.executable, step], check=True)
     print("done", stamp)
 
