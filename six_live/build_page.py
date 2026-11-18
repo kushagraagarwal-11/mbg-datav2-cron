@@ -122,6 +122,27 @@ def stock_check(cid):
     if s.get("LAST_RECEIVED") and not pend: parts.append("last delivery confirmed %s" % s["LAST_RECEIVED"])
     st = "ok" if free >= 5 else ("weak" if (free or pend or oq) else "fail")
     return (st, "; ".join(parts))
+try: _ap = json.load(io.open("applogin.json", encoding="utf-8"))
+except Exception: _ap = {}
+def app_check(cid):
+    """Column 9: owner, manager and technician on the CSP app. Accounts = active logins in the gateway CSP_USER table (OWNER / MANAGER, MANAGER_PLUS / TECHNICIAN), devices = CleverTap
+    CSP-app profiles per role, last activity = the later of the account's LOGIN_AT and the last 'App Launched' (30 d). Ticks when the owner and a technician were active within 7 days."""
+    a = _ap.get(cid)
+    if not a: return ("weak", "no app data")
+    def last(role):
+        r = a.get(role, {}); ts = [x for x in (r.get("last_launch"), r.get("last_login")) if x]
+        return max(ts) if ts else None
+    def age(ts): return (_NOW - dt.datetime.strptime(ts[:16], "%Y-%m-%d %H:%M")).days
+    def has(role): r = a.get(role, {}); return (r.get("accounts") or 0) + (r.get("devices") or 0) > 0
+    def word(role): return "no account" if not has(role) else (nice(last(role)[:16]) if last(role) else "never")
+    o, mg, t = last("OWNER"), last("MANAGER"), last("TECH")
+    if not has("OWNER") or not o: st = "fail"
+    elif not has("TECH"): st = "weak"
+    elif age(o) > 7 or not t or age(t) > 7 or (has("MANAGER") and not mg): st = "weak"
+    else: st = "ok"
+    n = lambda role, k: a.get(role, {}).get(k) or 0
+    return (st, "owner %s; manager %s; technician %s (%d/%d/%d active accounts, %d app devices)" % (word("OWNER"), word("MANAGER"), word("TECH"),
+            n("OWNER", "accounts"), n("MANAGER", "accounts"), n("TECH", "accounts"), n("OWNER", "devices") + n("MANAGER", "devices") + n("TECH", "devices")))
 def tick(state, note=""):
     g = {"ok": "&#10003;", "weak": "&#10003;", "fail": "&#10007;"}[state]
     return '<span class="ck %s">%s</span>' % (state, g) + ('<br><span class="mut">%s</span>' % esc(note) if note else "")
@@ -129,13 +150,13 @@ chk_rows = []
 for cid in ORDER:
     m = M[cid]; c = CHECK[cid]; cov = m["cov_pct"]
     cov_state = "ok" if cov >= 50 else "fail"
-    chk_rows.append('<tr><td><a href="#c_%s"><b>%s</b></a><br><span class="mut">%s</span></td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td><span class="vd %s">%s</span></td></tr>' % (
-        cid, esc(m["name"]), cid, tick(cov_state, "%s%% covered" % cov), tick(*c["spl"]), tick(*c["genie"]), tick(*c["expo"]), tick(*c["enf"]), tick(*c["route"]), tick(*c["leads"]), tick(*stock_check(cid)), c["verdict"][0], esc(c["verdict"][1])))
+    chk_rows.append('<tr><td><a href="#c_%s"><b>%s</b></a><br><span class="mut">%s</span></td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td><span class="vd %s">%s</span></td></tr>' % (
+        cid, esc(m["name"]), cid, tick(cov_state, "%s%% covered" % cov), tick(*c["spl"]), tick(*c["genie"]), tick(*c["expo"]), tick(*c["enf"]), tick(*c["route"]), tick(*c["leads"]), tick(*stock_check(cid)), tick(*app_check(cid)), c["verdict"][0], esc(c["verdict"][1])))
 CHK_HTML = ('<section class="card"><h2>Go-live checklist</h2><div class="tw"><table id="chk"><tr><th>CSP</th>'
     '<th>1 Atom coverage<br><span class="mut">share of the atom within 50 m of his points</span></th><th>2 Splitter mapping uploaded</th><th>3 Genie</th>'
-    '<th>4 Exposure<br><span class="mut">zone data set open</span></th><th>5 Enforcement</th><th>6 Routing sees it</th><th>7 Leads arrived</th><th>8 Routers in stock<br><span class="mut">free Netbox with the CSP (live NetBox custody table)</span></th><th>Verdict</th></tr>'
+    '<th>4 Exposure<br><span class="mut">zone data set open</span></th><th>5 Enforcement</th><th>6 Routing sees it</th><th>7 Leads arrived</th><th>8 Routers in stock<br><span class="mut">free Netbox with the CSP (live NetBox custody table)</span></th><th>9 App installed<br><span class="mut">owner / manager / technician on the CSP app</span></th><th>Verdict</th></tr>'
     + "".join(chk_rows) + '</table></div>'
-    '<p class="mut">Tick = passes; amber tick = passes but weak (reduced exposure, pattern watch, thin or non-converting leads); cross = fails. Atom coverage ticks at 50% or more. Routers in stock ticks at 5 or more free Netbox with the CSP, amber below 5 or when stock is only on the way, cross when none and nothing ordered. Routing, leads and stock refresh with the page; splitter, Genie, exposure and enforcement states are from the go-live health checks of 29 Oct.</p></section>')
+    '<p class="mut">Tick = passes; amber tick = passes but weak (reduced exposure, pattern watch, thin or non-converting leads); cross = fails. Atom coverage ticks at 50% or more. Routers in stock ticks at 5 or more free Netbox with the CSP, amber below 5 or when stock is only on the way, cross when none and nothing ordered. App installed ticks when the owner and a technician opened the CSP app or logged in within the last 7 days (gateway CSP_USER logins and CleverTap app launches); amber when a role is silent for over 7 days, has no account, or a manager account never opened it; cross when the owner never has. Routing, leads, stock and app refresh with the page; splitter, Genie, exposure and enforcement states are from the go-live health checks of 29 Oct.</p></section>')
 
 html = f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Eleven live CSPs - atom, splitters, bookings, task funnel</title>

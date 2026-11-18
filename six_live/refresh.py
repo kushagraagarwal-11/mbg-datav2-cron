@@ -136,6 +136,22 @@ from PROD_DB.CLEVERTAP_CSP_API.EVENTS_DATA e join pr on pr.clevertap_id = e.clev
 where e._fivetran_synced >= '{SINCE}' and not e._fivetran_deleted and e.event_name = 'App Launched' and e."TIMESTAMP" >= '{SINCE}'
 group by 1,2,3 order by 1,3""", "launches " + cid)
     json.dump(la, io.open("launches.json", "w"))
+    # 2b app accounts and logins per role, for checklist column 9: logins on the CSP app (gateway CSP_USER: OWNER / MANAGER, MANAGER_PLUS / TECHNICIAN, with LOGIN_AT)
+    #    and app devices per role (CleverTap CSP-app profiles) with the last 'App Launched' (30 d), one pull per window for the events
+    accts = mb(f"""select csp_id, case role when 'OWNER' then 'OWNER' when 'TECHNICIAN' then 'TECH' when 'MANAGER' then 'MANAGER' when 'MANAGER_PLUS' then 'MANAGER' else 'OTHER' end role,
+  count_if(status = 'ACTIVE') n_active, count(*) n_all, to_char(convert_timezone('Asia/Kolkata', max(case when status = 'ACTIVE' then login_at end)), 'YYYY-MM-DD HH24:MI') last_login, max(app_version) app_version
+from PROD_DB.CSP_GATEWAY_SERVICE_CSP_GATEWAY_SERVICE.CSP_USER where _fivetran_active and csp_id in ({IN}) group by 1, 2 order by 1, 2""", "accounts")
+    devs = mbc(lambda ID: f"""with pr as (select clevertap_id, cspid, case when upper(role) = 'OWNER' then 'OWNER' when upper(role) like 'MANAGER%' then 'MANAGER' when lower(role) = 'technician' then 'TECH' else 'OTHER' end role
+  from PROD_DB.CLEVERTAP_CSP_API.PROFILE_DATA where cspid in ({ID}) and not _fivetran_deleted),
+la as (select pr.cspid, pr.role, max(left(e."TIMESTAMP", 16)) last_launch, count(*) n30
+  from PROD_DB.CLEVERTAP_CSP_API.EVENTS_DATA e join pr on pr.clevertap_id = e.clevertap_id
+  where e._fivetran_synced >= dateadd(day, -35, current_timestamp) and not e._fivetran_deleted and e.event_name = 'App Launched' and e."TIMESTAMP" >= to_char(dateadd(day, -30, current_date), 'YYYY-MM-DD') group by 1, 2)
+select pr.cspid csp_id, pr.role, count(distinct pr.clevertap_id) devices, max(la.last_launch) last_launch, coalesce(sum(la.n30), 0) n30
+from pr left join la on la.cspid = pr.cspid and la.role = pr.role group by 1, 2""", "appdev")
+    app = {}
+    for a in accts: app.setdefault(a["CSP_ID"], {}).setdefault(a["ROLE"], {}).update(accounts=int(a["N_ACTIVE"] or 0), accounts_all=int(a["N_ALL"] or 0), last_login=a["LAST_LOGIN"], app_version=a["APP_VERSION"])
+    for d in devs: app.setdefault(d["CSP_ID"], {}).setdefault(d["ROLE"], {}).update(devices=int(d["DEVICES"] or 0), last_launch=d["LAST_LAUNCH"], launches_30d=int(d["N30"] or 0))
+    json.dump(app, io.open("applogin.json", "w"))
     # 3 tasks (FACT) + 4 TAS transition log
     json.dump(mb(f"""select csp_id, execution_candidate_id ec, connection_id conn, zone_id, to_char(created_at,'YYYY-MM-DD HH24:MI') created, current_state st, task_status ts, reason_code rc,
   case when executor_id is not null then 1 else 0 end asg, to_char(installation_completed_at,'YYYY-MM-DD HH24:MI') inst_at, to_char(confirmed_slot_at,'YYYY-MM-DD HH24:MI') slot_at, declined_reason, dismiss_count, call_attempts_count calls
