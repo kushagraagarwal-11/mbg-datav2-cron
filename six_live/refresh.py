@@ -131,9 +131,9 @@ group by 1""", "genie"):
     la = []
     for cid in CSPS:
         la += mb(f"""with pr as (select clevertap_id, cspid, upper(role) role from PROD_DB.CLEVERTAP_CSP_API.PROFILE_DATA where cspid = '{cid}' and not _fivetran_deleted and upper(role) in ('OWNER','MANAGER'))
-select pr.cspid, pr.role, left(e."TIMESTAMP", 16) ts, count(*) n
-from PROD_DB.CLEVERTAP_CSP_API.EVENTS_DATA e join pr on pr.clevertap_id = e.clevertap_id
-where e._fivetran_synced >= '{SINCE}' and not e._fivetran_deleted and e.event_name = 'App Launched' and e."TIMESTAMP" >= '{SINCE}'
+select pr.cspid, pr.role, left(e.event_time, 16) ts, count(*) n
+from PROD_DB.DBT.FCT_CSP_APP_EVENTS e join pr on pr.clevertap_id = e.clevertap_id
+where e._fivetran_synced >= '{SINCE}' and e.event_name = 'App Launched' and e.event_time >= '{SINCE}'
 group by 1,2,3 order by 1,3""", "launches " + cid)
     json.dump(la, io.open("launches.json", "w"))
     # 2b app accounts and logins per role, for checklist column 9: logins on the CSP app (gateway CSP_USER: OWNER / MANAGER, MANAGER_PLUS / TECHNICIAN, with LOGIN_AT)
@@ -143,9 +143,9 @@ group by 1,2,3 order by 1,3""", "launches " + cid)
 from PROD_DB.CSP_GATEWAY_SERVICE_CSP_GATEWAY_SERVICE.CSP_USER where _fivetran_active and csp_id in ({IN}) group by 1, 2 order by 1, 2""", "accounts")
     devs = mbc(lambda ID: f"""with pr as (select clevertap_id, cspid, case when upper(role) = 'OWNER' then 'OWNER' when upper(role) like 'MANAGER%' then 'MANAGER' when lower(role) = 'technician' then 'TECH' else 'OTHER' end role
   from PROD_DB.CLEVERTAP_CSP_API.PROFILE_DATA where cspid in ({ID}) and not _fivetran_deleted),
-la as (select pr.cspid, pr.role, max(left(e."TIMESTAMP", 16)) last_launch, count(*) n30
-  from PROD_DB.CLEVERTAP_CSP_API.EVENTS_DATA e join pr on pr.clevertap_id = e.clevertap_id
-  where e._fivetran_synced >= dateadd(day, -35, current_timestamp) and not e._fivetran_deleted and e.event_name = 'App Launched' and e."TIMESTAMP" >= to_char(dateadd(day, -30, current_date), 'YYYY-MM-DD') group by 1, 2)
+la as (select pr.cspid, pr.role, max(left(e.event_time, 16)) last_launch, count(*) n30
+  from PROD_DB.DBT.FCT_CSP_APP_EVENTS e join pr on pr.clevertap_id = e.clevertap_id
+  where e._fivetran_synced >= dateadd(day, -35, current_timestamp) and e.event_name = 'App Launched' and e.event_time >= to_char(dateadd(day, -30, current_date), 'YYYY-MM-DD') group by 1, 2)
 select pr.cspid csp_id, pr.role, count(distinct pr.clevertap_id) devices, max(la.last_launch) last_launch, coalesce(sum(la.n30), 0) n30
 from pr left join la on la.cspid = pr.cspid and la.role = pr.role group by 1, 2""", "appdev")
     app = {}
@@ -214,21 +214,23 @@ m as (select bx.*, e.connection_id, e.bct, row_number() over (partition by bx.mo
 select m.atom, to_char(m.added_time,'YYYY-MM-DD HH24:MI') booked, round(m.lat,6) lat, round(m.lng,6) lng, m.src, m.connection_id conn, to_char(m.bct,'YYYY-MM-DD HH24:MI') confirm, null as cands, md5(m.mobile) mh, m.booking_state bst, m.status st, m.payment_status pst
 from m where m.rn = 1 order by m.atom, m.added_time""", "bookings_all " + _cid)
     json.dump(bk_rows, io.open("bookings.json", "w")); json.dump(bka_rows, io.open("bookings_all.json", "w"))
+    # CleverTap reads go through PROD_DB.DBT.FCT_CSP_APP_EVENTS (dbt, hourly): EVENTS_DATA rows for the app events used here,
+    # properties already parsed (execution_id / entry_source), deleted rows dropped - instead of re-parsing EVENTS_DATA per window.
     # 7 CleverTap task events per execution candidate (role '' = owner/manager device, 'technician' = technician device)
     json.dump(mbc(lambda ID: f"""with t as (select execution_candidate_id ec, csp_id from PROD_DB.DBT_CSP.FACT_INSTALL_CANDIDATES where etl_current = true and task_family = 'INSTALL' and csp_id in ({ID}) and created_at >= '{SINCE}'),
 pr as (select clevertap_id, cspid, case when lower(role) = 'technician' then 'technician' else '' end role from PROD_DB.CLEVERTAP_CSP_API.PROFILE_DATA where cspid in ({ID}) and not _fivetran_deleted)
-select t.csp_id, t.ec, e.event_name, pr.role, min(e."TIMESTAMP") first_ts, max(e."TIMESTAMP") last_ts, count(*) n, count(distinct e.clevertap_id) devices,
-  listagg(distinct try_parse_json(e.properties):entry_source::varchar, '|') srcs
-from PROD_DB.CLEVERTAP_CSP_API.EVENTS_DATA e join pr on pr.clevertap_id = e.clevertap_id join t on t.ec = try_parse_json(e.properties):execution_id::varchar
-where e._fivetran_synced >= '{SINCE}' and not e._fivetran_deleted and e."TIMESTAMP" >= '{SINCE}' and e.event_name in ('fpn_delivered','install_candidate_opened','pn_clicked','pn_delivered')
+select t.csp_id, t.ec, e.event_name, pr.role, min(e.event_time) first_ts, max(e.event_time) last_ts, count(*) n, count(distinct e.clevertap_id) devices,
+  listagg(distinct e.entry_source, '|') srcs
+from PROD_DB.DBT.FCT_CSP_APP_EVENTS e join pr on pr.clevertap_id = e.clevertap_id join t on t.ec = e.execution_id
+where e._fivetran_synced >= '{SINCE}' and e.event_time >= '{SINCE}' and e.event_name in ('fpn_delivered','install_candidate_opened','pn_clicked','pn_delivered')
 group by 1,2,3,4 order by 1,2,5""", "events"), io.open("events.json", "w"))
     # 8 seconds from push delivery to first app interaction (ui30)
     json.dump(mbc(lambda ID: f"""with t as (select execution_candidate_id ec, csp_id from PROD_DB.DBT_CSP.FACT_INSTALL_CANDIDATES where etl_current = true and task_family = 'INSTALL' and csp_id in ({ID}) and created_at >= '{SINCE}'),
-dl as (select t.csp_id, t.ec, min(try_to_timestamp(e."TIMESTAMP")) delivered_at from t join PROD_DB.CLEVERTAP_CSP_API.EVENTS_DATA e on try_parse_json(e.properties):execution_id::varchar = t.ec
-  where e._fivetran_synced >= '{SINCE}' and not e._fivetran_deleted and e.event_name in ('pn_delivered','fpn_delivered') group by 1,2),
+dl as (select t.csp_id, t.ec, min(e.event_ts) delivered_at from t join PROD_DB.DBT.FCT_CSP_APP_EVENTS e on e.execution_id = t.ec
+  where e._fivetran_synced >= '{SINCE}' and e.event_name in ('pn_delivered','fpn_delivered') group by 1,2),
 pr as (select clevertap_id, cspid from PROD_DB.CLEVERTAP_CSP_API.PROFILE_DATA where cspid in ({ID}) and not _fivetran_deleted and upper(role) in ('OWNER','MANAGER')),
-ui as (select pr.cspid, e.event_name, try_to_timestamp(e."TIMESTAMP") ts from PROD_DB.CLEVERTAP_CSP_API.EVENTS_DATA e join pr on pr.clevertap_id = e.clevertap_id
-  where e._fivetran_synced >= '{SINCE}' and not e._fivetran_deleted and e.event_name in ('home_feed_rendered','install_candidate_opened','candidate_closed','drawer_opened','sheet_opened','strip_chip_opened','home_refreshed','batch_drilldown_opened','drawer_item_opened','feed_refreshed','service_status_opened','overflow_menu_opened','nbrec_group_opened','recharge_customer_selected','ticket_accepted','technician_assigned','install_task_assigned','restore_candidate_opened','pickup_candidate_opened','pn_clicked','fpn_action_taken','call_initiated','deeplink_clicked','banner_opened','app_exited'))
+ui as (select pr.cspid, e.event_name, e.event_ts ts from PROD_DB.DBT.FCT_CSP_APP_EVENTS e join pr on pr.clevertap_id = e.clevertap_id
+  where e._fivetran_synced >= '{SINCE}' and e.event_name in ('home_feed_rendered','install_candidate_opened','candidate_closed','drawer_opened','sheet_opened','strip_chip_opened','home_refreshed','batch_drilldown_opened','drawer_item_opened','feed_refreshed','service_status_opened','overflow_menu_opened','nbrec_group_opened','recharge_customer_selected','ticket_accepted','technician_assigned','install_task_assigned','restore_candidate_opened','pickup_candidate_opened','pn_clicked','fpn_action_taken','call_initiated','deeplink_clicked','banner_opened','app_exited'))
 select dl.csp_id, dl.ec, min(case when ui.ts >= dl.delivered_at then datediff('second', dl.delivered_at, ui.ts) end) sec_ui_after
 from dl left join ui on ui.cspid = dl.csp_id and ui.ts between dl.delivered_at and dateadd(hour, 48, dl.delivered_at)
 group by 1, 2""", "ui30"), io.open("ui30.json", "w"))
