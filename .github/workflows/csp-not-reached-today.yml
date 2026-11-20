@@ -2,8 +2,11 @@ name: "Today: CSP tried, cx not reached (every 30 min)"
 
 on:
   schedule:
-    # every 30 minutes; GitHub may delay a few minutes at busy times
-    - cron: "7,37 * * * *"
+    # Night pause 23:00-04:30 IST (key-972 warehouse cost, Nov 2026): nothing is scheduled
+    # after 22:30 IST (GitHub can start a run late) or before 04:30, and the first run
+    # is at 04:30-04:37 so the morning data is in by ~04:55. Runs (IST): 04:37 first, 22:07 last, 36 runs a day.
+    # Was: 7,37 * * * *
+    - cron: "7,37 0-16,23 * * *"
   workflow_dispatch: {}
 
 concurrency:

@@ -2,9 +2,14 @@ name: Data V2 refresh (hourly)
 
 on:
   schedule:
+    # Night pause 23:00-04:30 IST (key-972 warehouse cost, Nov 2026): nothing is scheduled
+    # after 22:30 IST (GitHub can start a run late) or before 04:30, and the first run
+    # is at 04:30-04:37 so the morning data is in by ~04:55. Runs (IST): 04:31 first, 21:47 last, 19 runs a day.
+    # Was: 17 * * * *
     # every hour at :17 (off the congested top-of-hour). A dropped slot is covered
     # by the next run; the sheet write is idempotent (clear + rewrite).
-    - cron: "17 * * * *"
+    - cron: "17 0-16 * * *"
+    - cron: "1,17 23 * * *"
   workflow_dispatch: {}
 
 jobs:

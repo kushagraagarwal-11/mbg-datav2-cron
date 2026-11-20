@@ -2,10 +2,12 @@ name: Payout750 event log (every 5 min)
 
 on:
   schedule:
-    # every 5 minutes — runs on GitHub's cloud (laptop can be off), public repo = free minutes.
-    # GitHub's scheduler is best-effort: in practice it fires roughly every 5-15 min and can skip
-    # under load. The jobs are idempotent (clear + rewrite / profile-upsert), so late runs are harmless.
-    - cron: "*/5 * * * *"
+    # Night pause 23:00-04:30 IST (key-972 warehouse cost, Nov 2026): nothing is scheduled
+    # after 22:30 IST (GitHub can start a run late) or before 04:30, and the first run
+    # is at 04:30-04:37 so the morning data is in by ~04:55. Runs (IST): 04:30 first, 22:30 last, 217 runs a day.
+    # Was: */5 * * * *
+    - cron: "*/5 0-16,23 * * *"
+    - cron: "0 17 * * *"
   workflow_dispatch: {}
 
 jobs:

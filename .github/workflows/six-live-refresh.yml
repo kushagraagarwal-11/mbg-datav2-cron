@@ -2,7 +2,12 @@ name: "Six-live page refresh (every 2 h) -> csp-atoms-live.pages.dev"
 
 on:
   schedule:
-    - cron: "15 */2 * * *"
+    # Night pause 23:00-04:30 IST (key-972 warehouse cost, Nov 2026): nothing is scheduled
+    # after 22:30 IST (GitHub can start a run late) or before 04:30, and the first run
+    # is at 04:30-04:37 so the morning data is in by ~04:55. Runs (IST): 04:31 first, 21:45 last, 10 runs a day.
+    # Was: 15 */2 * * *
+    - cron: "15 0,2,4,6,8,10,12,14,16 * * *"
+    - cron: "1 23 * * *"
   workflow_dispatch: {}
 
 concurrency:

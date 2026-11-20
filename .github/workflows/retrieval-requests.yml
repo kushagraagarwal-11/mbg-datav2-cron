@@ -2,11 +2,11 @@ name: Retrieval requests — Delhi / Mumbai / Bharat (daily 00:01 IST)
 
 on:
   schedule:
-    # 00:01 IST = 18:31 UTC the previous day. One run a day, just after midnight, so
-    # every row covers a day that has fully closed. GitHub throttles scheduled runs and
-    # may fire this late; the write is append-only and keyed on (date, csp), so a late or
-    # skipped run just picks the missing days up next time.
-    - cron: "31 18 * * *"
+    # Night pause 23:00-04:30 IST (key-972 warehouse cost, Nov 2026): nothing is scheduled
+    # after 22:30 IST (GitHub can start a run late) or before 04:30, and the first run
+    # is at 04:30-04:37 so the morning data is in by ~04:55. Runs (IST): 04:31.
+    # Was: 31 18 * * *
+    - cron: "1 23 * * *"
   workflow_dispatch: {}
 
 jobs:
