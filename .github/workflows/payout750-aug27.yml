@@ -2,8 +2,11 @@ name: Payout750 27-Aug tracker (hourly)
 
 on:
   schedule:
-    # top of every hour. Campaign goes live 27-Aug 10:30 IST; before that all 92 read not-viewed.
-    - cron: "0 * * * *"
+    # Night pause 23:00-04:30 IST (key-972 warehouse cost, Nov 2026): nothing is scheduled
+    # after 22:30 IST (GitHub can start a run late) or before 04:30, and the first run
+    # is at 04:30-04:37 so the morning data is in by ~04:55. Runs (IST): 04:30 first, 22:30 last, 19 runs a day.
+    # Was: 0 * * * *
+    - cron: "0 0-17,23 * * *"
   workflow_dispatch: {}
 
 jobs:

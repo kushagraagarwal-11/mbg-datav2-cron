@@ -2,11 +2,11 @@ name: P1/P2 Winbacks — Pre/Post, main tab, Daily Dashboard, Netbox funnel (eve
 
 on:
   schedule:
-    # every 20 min at :05/:25/:45 (user, 15-Sep: "refresh every 15-20 mins"); the laptop backup
-    # runs at :15/:35/:55. GitHub delays/skips scheduled runs, so real cadence here is looser.
-    # Replaces the laptop task WiomWinbackPrePost, which failed ~1 run in 3 on connection
-    # resets and only ran while the laptop was on.
-    - cron: "5,25,45 * * * *"
+    # Night pause 23:00-04:30 IST (key-972 warehouse cost, Nov 2026): nothing is scheduled
+    # after 22:30 IST (GitHub can start a run late) or before 04:30, and the first run
+    # is at 04:30-04:37 so the morning data is in by ~04:55. Runs (IST): 04:35 first, 22:15 last, 54 runs a day.
+    # Was: 5,25,45 * * * *
+    - cron: "5-45/20 0-16,23 * * *"
   workflow_dispatch: {}
 
 # a slow run must never overlap the next one -- winback_prepost.py clears its tab first
