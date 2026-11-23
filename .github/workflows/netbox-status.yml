@@ -2,10 +2,11 @@ name: Netbox live refresh — cols J+L and Carry Fee CSPs (every 15 min)
 
 on:
   schedule:
-    # every 15 min at :07 past (staggered off Data V2 :17 and Audit Approval :37).
-    # GitHub throttles scheduled runs, so real-world freshness lands ~15-30 min.
-    # Idempotent (full rewrite of column L), so a skipped tick costs nothing.
-    - cron: "7,22,37,52 * * * *"
+    # Night pause 23:00-04:30 IST (key-972 warehouse cost, Nov 2026): nothing is scheduled
+    # after 22:30 IST (GitHub can start a run late) or before 04:30, and the first run
+    # is at 04:30-04:37 so the morning data is in by ~04:55. Runs (IST): 04:37 first, 22:22 last, 72 runs a day.
+    # Was: 7,22,37,52 * * * *
+    - cron: "7-52/15 0-16,23 * * *"
   workflow_dispatch: {}
 
 jobs:

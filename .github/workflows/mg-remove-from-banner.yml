@@ -2,9 +2,11 @@ name: MG remove-from-banner (daily 11pm IST)
 
 on:
   schedule:
-    # 17:30 UTC = 23:00 IST daily. GitHub's scheduler is best-effort (may lag 10-30 min);
-    # the job is idempotent (a CSP already removed is a no-op), so a late run is harmless.
-    - cron: "30 17 * * *"
+    # Night pause 23:00-04:30 IST (key-972 warehouse cost, Nov 2026): nothing is scheduled
+    # after 22:30 IST (GitHub can start a run late) or before 04:30, and the first run
+    # is at 04:30-04:37 so the morning data is in by ~04:55. Runs (IST): 22:30.
+    # Was: 30 17 * * *
+    - cron: "0 17 * * *"
   workflow_dispatch: {}
 
 jobs:

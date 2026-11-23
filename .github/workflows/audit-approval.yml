@@ -2,8 +2,13 @@ name: CSPs Audit Approval refresh (hourly)
 
 on:
   schedule:
+    # Night pause 23:00-04:30 IST (key-972 warehouse cost, Nov 2026): nothing is scheduled
+    # after 22:30 IST (GitHub can start a run late) or before 04:30, and the first run
+    # is at 04:30-04:37 so the morning data is in by ~04:55. Runs (IST): 04:31 first, 22:07 last, 19 runs a day.
+    # Was: 37 * * * *
     # every hour at :37 (staggered off the Data V2 job at :17). Idempotent (clear + rewrite).
-    - cron: "37 * * * *"
+    - cron: "37 0-16 * * *"
+    - cron: "1,37 23 * * *"
   workflow_dispatch: {}
 
 jobs:
