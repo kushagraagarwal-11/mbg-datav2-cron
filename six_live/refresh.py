@@ -214,7 +214,7 @@ m as (select bx.*, e.connection_id, e.bct, row_number() over (partition by bx.mo
 select m.atom, to_char(m.added_time,'YYYY-MM-DD HH24:MI') booked, round(m.lat,6) lat, round(m.lng,6) lng, m.src, m.connection_id conn, to_char(m.bct,'YYYY-MM-DD HH24:MI') confirm, null as cands, md5(m.mobile) mh, m.booking_state bst, m.status st, m.payment_status pst
 from m where m.rn = 1 order by m.atom, m.added_time""", "bookings_all " + _cid)
     json.dump(bk_rows, io.open("bookings.json", "w")); json.dump(bka_rows, io.open("bookings_all.json", "w"))
-    # CleverTap reads go through PROD_DB.DBT.FCT_CSP_APP_EVENTS (dbt, hourly): EVENTS_DATA rows for the app events used here,
+    # CleverTap reads go through PROD_DB.DBT.FCT_CSP_APP_EVENTS (dbt, every 3 h): EVENTS_DATA rows for the app events used here,
     # properties already parsed (execution_id / entry_source), deleted rows dropped - instead of re-parsing EVENTS_DATA per window.
     # 7 CleverTap task events per execution candidate (role '' = owner/manager device, 'technician' = technician device)
     json.dump(mbc(lambda ID: f"""with t as (select execution_candidate_id ec, csp_id from PROD_DB.DBT_CSP.FACT_INSTALL_CANDIDATES where etl_current = true and task_family = 'INSTALL' and csp_id in ({ID}) and created_at >= '{SINCE}'),
